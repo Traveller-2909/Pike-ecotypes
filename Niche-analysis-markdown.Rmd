@@ -1,0 +1,2788 @@
+---
+title: "Niche-analysis"
+author: "TR"
+date: "27 1 2022"
+output: html_document
+---
+```{r packages, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(sp)
+library(rgdal)
+library(purrr)
+library(compensateR)
+library(lubridate)
+library(measurements)
+library(ipdw)
+library(geoR)
+library(spatstat)
+library(gdata)
+library(rgeos)
+library(sf)
+library(rspatial)
+library(dismo)
+library(gstat)
+library(lme4)
+library(mclust)
+library(zoo)
+library(dtwclust)
+library(RColorBrewer)
+library(ggpubr)
+```
+
+# Data handling environmental data
+```{r LUNG cleanup, include=FALSE, eval=FALSE}
+# Script to read in and clean up LUNG data tables
+
+rm(list = ls())
+
+# Read in data------------------------------------------------------------------
+read_excel_allsheets <- function(filename, tibble = FALSE) {
+    # I prefer straight data.frames
+    # but if you like tidyverse tibbles (the default with read_excel)
+    # then just pass tibble = TRUE
+    sheets <- readxl::excel_sheets(filename)
+    x <- lapply(sheets, function(X) readxl::read_excel(filename, sheet = X))
+    if(!tibble) x <- lapply(x, as.data.frame)
+    names(x) <- sheets
+    x
+}
+
+LUNGdata_coast_list <- read_excel_allsheets("Data/LUNG-Daten_all_coast_2005-2020.xlsx")
+LUNGdata_rivers_list <-read_excel_allsheets("Data/LUNG-Daten_all_rivers_2005-2020.xlsx")
+
+# into one dataframe
+
+LUNGdata_coast <- bind_rows(LUNGdata_coast_list)
+LUNGdata_rivers <- bind_rows(LUNGdata_rivers_list)
+
+#Prepare data frames
+
+LUNGdata_coast_clean <- LUNGdata_coast %>%
+  transmute(id = MstNr,
+            name = Messstelle,
+            water_body = Gewässer,
+            datetime = DATUM_Uhrzeit,
+            parameter = Param_kurz,
+            parameter2 = Parameter,
+            value = WERT,
+            unit = Einheit,
+            depth = TIEFE,
+            Lat = HW_GEO,
+            Long = RW_GEO,
+            turbidity = SICHTTIEFE,
+            type = "Coast")
+
+LUNGdata_rivers <- LUNGdata_rivers %>%
+  transmute(id = MS_NR,
+            name = Messstelle,
+            water_body = Gewässer,
+            datetime = DATUM_Uhrzeit,
+            parameter = Param_kurz,
+            parameter2 = Parameter,
+            value = WERT,
+            unit = Einheit,
+            depth = NA,
+            HW = HW,
+            RW = RW,
+            turbidity = NA)
+
+# Convert from Gauß-Krueger to WGS84 coordinates--------------------------------
+LUNGdata_rivers_GK <- data.frame(cbind(LUNGdata_rivers, "X_GK" = LUNGdata_rivers$RW, 
+                                 "Y_GK" = LUNGdata_rivers$HW))
+
+coordinates(LUNGdata_rivers_GK) <- c("X_GK", "Y_GK")
+proj4string(LUNGdata_rivers_GK) <- CRS("+init=epsg:5650")
+LUNGdata_rivers_WGS84 <- spTransform(LUNGdata_rivers_GK, CRS("+init=epsg:4326"))
+
+LUNGdata_rivers_WGS84 <- as.data.frame(LUNGdata_rivers_WGS84)
+
+LUNGdata_rivers_clean <- LUNGdata_rivers_WGS84%>%
+  transmute(id = id,
+            name = name,
+            water_body = water_body,
+            datetime = datetime,
+            parameter = parameter,
+            parameter2 = parameter2,
+            value = value,
+            unit = unit,
+            depth = depth,
+            Lat = Y_GK,
+            Long = X_GK,
+            turbidity = turbidity, 
+            type = "Freshwater")
+
+# Filter for variables of interest before converting to wide and join-----------
+LUNG_sal_temp_coast <- LUNGdata_coast_clean %>%
+  filter(parameter == "W-T"|parameter2=="Wassertemperatur"|
+           parameter == "SAL"|parameter2 == "Salzgehalt")%>%
+  transmute(id = id,
+            name = name,
+            waterbody = water_body,
+            date = lubridate::as_date(parse_date_time(datetime, orders = "ymd_HMS")),
+            day = lubridate::day(parse_date_time(datetime, orders = "ymd_HMS")),
+            month = lubridate::month(parse_date_time(datetime, orders = "ymd_HMS")),
+            year = lubridate::year(parse_date_time(datetime, orders = "ymd_HMS")),
+            parameter = parameter,
+            value = value,
+            depth = depth,
+            Lat = Lat,
+            Long = Long,
+            turbidity = turbidity,
+            measurement = "LUNG",
+            type = type)
+
+LUNG_sal_temp_rivers <- LUNGdata_rivers_clean %>%
+  filter(parameter == "W-T"|parameter2=="Wassertemperatur"|
+           parameter == "SAL"|parameter2 == "Salzgehalt")%>%
+  transmute(id = id,
+            name = name,
+            waterbody = water_body,
+            date = lubridate::as_date(parse_date_time(datetime, orders = "ymd_HMS")),
+            day = lubridate::day(parse_date_time(datetime, orders = "ymd_HMS")),
+            month = lubridate::month(parse_date_time(datetime, orders = "ymd_HMS")),
+            year = lubridate::year(parse_date_time(datetime, orders = "ymd_HMS")),
+            parameter = parameter,
+            value = value,
+            depth = depth,
+            Lat = Lat,
+            Long = Long,
+            turbidity = turbidity,
+            measurement = "LUNG",
+            type = type)
+
+#insert NAs for later means
+LUNG_sal_temp_rivers <- LUNG_sal_temp_rivers%>%
+  group_by(name, year, month, parameter)%>%
+  summarize(id = id,
+            name = name,
+            waterbody = waterbody,
+            month = month,
+            year = year,
+            parameter = parameter,
+            value = mean(value, na.rm = T),
+            Lat = Lat,
+            Long = Long,
+            measurement = measurement,
+            type = type)%>%
+  ungroup()%>%
+  distinct()%>%
+  pivot_wider(names_from = month, values_from = value)
+
+LUNG_sal_temp_rivers <- LUNG_sal_temp_rivers%>%
+  pivot_longer(cols = c(10:21), names_to = "month",
+               values_to = "value", values_drop_na = F)
+
+# remove double rows before converting to wide
+LUNG_sal_temp_coast <- LUNG_sal_temp_coast[-c(11296, 11298, 563, 564),]
+
+LUNG_sal_temp_coast <- LUNG_sal_temp_coast%>%group_by(name, year, month, parameter)%>%
+  summarize(id = id,
+            name = name,
+            waterbody = waterbody,
+            month = month,
+            year = year,
+            parameter = parameter,
+            value = mean(value, na.rm = T),
+            Lat = Lat,
+            Long = Long,
+            measurement = measurement,
+            type = type)%>%
+  ungroup()%>%
+  distinct()%>%
+  pivot_wider(names_from = month, values_from = value)
+
+LUNG_sal_temp_coast <- LUNG_sal_temp_coast%>%
+  pivot_longer(cols = c(10:21), names_to = "month",
+               values_to = "value", values_drop_na = F)
+
+# convert to wide
+LUNG_sal_temp_coast <- spread(LUNG_sal_temp_coast, parameter, value)
+head(LUNG_sal_temp_coast)
+LUNG_sal_temp_rivers <- spread(LUNG_sal_temp_rivers, parameter, value)
+head(LUNG_sal_temp_rivers)
+LUNG_sal_temp_rivers$SAL <- 0
+
+LUNGdata_all <- rbind(LUNG_sal_temp_coast, LUNG_sal_temp_rivers)
+names(LUNGdata_all)[11] <- paste("WT")
+
+# Add ID numbers
+LUNGdata_all <- LUNGdata_all %>%
+  transmute(id = case_when(name %in% "AW1 Trockenort" ~"0111030108",
+                           waterbody %in% "Graben 44" ~"0103070022",
+                           name %in% "DB6 Barth oe." ~"0103050603",
+                           name %in% "DB2 Sundische Wiese" ~"0103050208",
+                           name %in% "DB1 Pramort" ~"0103050101",
+                           name %in% "GS Gellenstrom Hiddensee w." ~"0103070503",   
+                           name %in% "RB2 Vitte oe." ~"0112190202",
+                           name %in% "RB3 Bugspitze s." ~"0112190309",
+                           name %in% "RB1 Schaprode w." ~"0112400185",
+                           name %in% "KB90 Fahrwasser I.Libitz w." ~"0103059085",
+                           name %in% "S66 Stralsund" ~"0109016609",
+                           name %in% "RB6 Wittower Faehre oe." ~"0112280603",
+                           name %in% "RB9 Glowe sw." ~"0112390909",
+                           name %in% "RB10 Lietzow n." ~"0112391004",
+                           name %in% "RB15 Buschvitz oe." ~"0112391500",
+                           name %in% "GB3 Daenische Wiek n." ~"0105010306",
+                           name %in% "GB2 I.Vilm s." ~"0105010285",
+                           name %in% "GB19 Zentralbereich" ~"0105011907",
+                           name %in% "GB7 Struck" ~"0105010701",
+                           name %in% "GB10 Ruden s." ~"0111021001",
+                           name %in% "O133 suedl. Greifsw. Oie" ~"0111071308",
+                           name %in% "P20 Peenemuende s." ~"0111032085",
+                           name %in% "P42 Wolgast s." ~"0111034208",
+                           name %in% "P48 Lassan" ~"0111034806",
+                           TRUE ~ id),
+            name = name,
+            waterbody = waterbody,
+            #date = date,
+            #day = day,
+            month = month,
+            year = year,
+            #depth = depth,
+            Lat = Lat,
+            Long = Long,
+            #turbidity = turbidity,
+            measurement = measurement,
+            type = type,
+            SAL = SAL,
+            WT = WT)
+
+#Must be zero:
+unique(ifelse(is.na(LUNGdata_all$id)==T, 1, 0))
+
+# join in 2021 data-------------------------------------------------------------
+
+LUNGdata_coast_21 <- read.delim("Data/LUNG-Daten_all_coast_2021.txt", header = T, 
+                                stringsAsFactors = F)
+#clean
+LUNGdata_coast_21 <- LUNGdata_coast_21 %>%
+  transmute(id = paste0(0, PN.Stellennr.),
+            date = lubridate::as_date(parse_date_time(Probenahmedatum, orders = "dmy_HM")),
+            day = lubridate::day(parse_date_time(Probenahmedatum, orders = "dmy_HM")),
+            month = lubridate::month(parse_date_time(Probenahmedatum, orders = "dmy_HM")),
+            year = lubridate::year(parse_date_time(Probenahmedatum, orders = "dmy_HM")),
+            depth = case_when(Tiefeninformation %in% "Grundnähe" ~ "bottom",
+                              TRUE ~ "surface"),
+            parameter = Parameter,
+            value = Endergebnis)%>%
+  filter(parameter == "Wassertemperatur"|
+           parameter == "Salzgehalt")
+
+#insert NAs
+LUNGdata_coast_21 <- LUNGdata_coast_21%>%
+  group_by(id, year, month, parameter)%>%
+  summarize(id = id,
+            month = month,
+            year = year,
+            parameter = parameter,
+            value = mean(as.numeric(value), na.rm = T))%>%
+  ungroup()%>%
+  distinct()%>%
+  pivot_wider(names_from = month, values_from = value)
+
+LUNGdata_coast_21 <- LUNGdata_coast_21%>%
+  pivot_longer(cols = c(4:15), names_to = "month",
+               values_to = "value", values_drop_na = F)
+
+LUNGdata_coast_21 <- rbind(LUNGdata_coast_21[LUNGdata_coast_21$year!=2022,],
+                           na.omit(LUNGdata_coast_21[LUNGdata_coast_21$year==2022,]))
+
+
+#wide
+LUNGdata_coast_21 <- spread(LUNGdata_coast_21, parameter, value)
+head(LUNGdata_coast_21)
+
+LUNGdata_coast_21 <- LUNGdata_coast_21 %>%
+  transmute(id = id,
+            #date = date,
+            #day = day,
+            month = month,
+            year = year,
+            #depth = depth,
+            SAL = Salzgehalt,
+            WT = Wassertemperatur)
+
+# for loop to complement rows
+IDstation <- unique(LUNGdata_coast_21$id)
+df <- data.frame()
+for (i in 1:length(IDstation)) {
+  nm <- na.omit(unlist(ifelse(LUNGdata_coast_21$id == IDstation[i], 
+              first(LUNGdata_all[which(LUNGdata_all$id == IDstation[i]), 
+                                 "name"]), NA)))
+  wb <- na.omit(unlist(ifelse(LUNGdata_coast_21$id == IDstation[i], 
+              first(LUNGdata_all[which(LUNGdata_all$id == IDstation[i]),
+                                 "waterbody"]), NA)))
+  Lat <- na.omit(unlist(ifelse(LUNGdata_coast_21$id == IDstation[i], 
+              first(LUNGdata_all[which(LUNGdata_all$id == IDstation[i]), "Lat"]), NA)))
+  Long <- na.omit(unlist(ifelse(LUNGdata_coast_21$id == IDstation[i], 
+              first(LUNGdata_all[which(LUNGdata_all$id == IDstation[i]), 
+                                 "Long"]), NA)))
+  df <- rbind(df, data.frame(nm, wb, Lat, Long))
+}
+
+#add missing columns
+LUNGdata_coast_21 <- cbind(LUNGdata_coast_21, df)
+#LUNGdata_coast_21$turbidity <- NA
+LUNGdata_coast_21$type <- "Coast"
+LUNGdata_coast_21$measurement <- "LUNG"
+
+LUNGdata_coast_21 <- LUNGdata_coast_21 %>%
+  transmute(id = id,
+            name = nm,
+            waterbody = wb,
+            #date = date,
+            #day = day,
+            month = month,
+            year = year,
+            #depth = depth,
+            Lat = Lat,
+            Long = Long,
+            #turbidity = turbidity,
+            measurement = measurement,
+            type = type,
+            SAL = SAL,
+            WT = WT)
+
+LUNGdata_all <- data.frame(rbind(LUNGdata_all, LUNGdata_coast_21))
+
+#calculate missing months
+LUNGdata_all$SAL <- ifelse(is.na(LUNGdata_all$SAL), mean())##Here you left you donkey!
+
+# save file
+write.table(LUNGdata_all, file = "Data/LUNGdata_clean.txt", sep = "\t", row.names = F)
+Test <- read.delim("Data/LUNGdata_clean.txt", header = T, sep = "\t")
+Test
+```
+
+```{r Logger cleanup, include=FALSE, eval=FALSE}
+# script to clean up HOBO-logger data files and provide spatial coordinates
+rm(list = ls())
+# Read in logger data
+#make list of all files in directory
+filelist <- paste0("Data/HOBO/", list.files(path = "Data/HOBO", pattern = ".*.txt")) 
+datalist <- lapply(filelist, FUN = read.table, header = TRUE, sep = ",") 
+
+#rbind to generate data frame from list
+Logger <- do.call("rbind", datalist) 
+
+# Clean format
+Logger$Lat <- gsub(" ", "", Logger$N.dm.)
+Logger$Lat <- paste0(substr(Logger$Lat, 1, 2), " ", substr(Logger$Lat, 3, nchar(Logger$Lat)))
+Logger$Lat <- gsub("\n", "", Logger$Lat) #remove strange \n
+
+Logger$Long <- gsub(" ", "", Logger$E.dm.)
+Logger$Long <- paste0(substr(Logger$Long, 1, 2), " ", substr(Logger$Long, 3, nchar(Logger$Long)))
+Logger$Long <- gsub("\n", "", Logger$Long) #remove strange \n
+
+#Check data frame, must be as many unique values as there are coordinates
+Logger <- Logger %>% drop_na()
+CCheck <- data.frame(unique(Logger$hobo.ID), unique(Logger$Lat),unique(Logger$Long))
+nrow(CCheck) == 20
+
+CCheck$LAT <- measurements::conv_unit(CCheck$unique.Logger.Lat., 
+                                      from = "deg_dec_min", to = "dec_deg")
+CCheck$LON <- measurements::conv_unit(CCheck$unique.Logger.Long., 
+                                      from = "deg_dec_min", to = "dec_deg")
+
+# Cleanup
+
+Logger_clean <- Logger %>%
+  transmute(id = as.factor(hobo.ID),
+            name = Num, 
+            waterbody = NA,
+            date = lubridate::as_date(parse_date_time(Datetime.GMT.1., orders = c("mdy_HMS"))),
+            day = lubridate::day(parse_date_time(Datetime.GMT.1., orders = c("mdy_HMS"))),
+            month = lubridate::month(parse_date_time(Datetime.GMT.1., orders = c("mdy_HMS"))),
+            year = lubridate::year(parse_date_time(Datetime.GMT.1., orders = c("mdy_HMS"))),
+            depth = "NA",
+            Lat = measurements::conv_unit(Lat, from = "deg_dec_min", to = "dec_deg"),
+            Long = measurements::conv_unit(Long, from = "deg_dec_min", to = "dec_deg"),
+            turbidity = "NA",
+            type = "Logger",
+            #Salinity conversion from GitHub
+            SAL = salinity(sp_conductance(temperature = Temp.C., 
+                                            conductivity =   FullRange.uS.cm.)),
+            WT = Temp.C.)
+
+# save file
+write.table(Logger_clean, file = "Data/Logger_clean.txt", sep = "\t", row.names = F)
+Test <- read.delim("Data/Logger_clean.txt", header = T, sep = "\t")
+Test
+
+salinity(22000)
+```
+
+```{r plot & clean Loggerdata, include=FALSE, eval=FALSE}
+# script to visually inspect logger data
+rm(list = ls())
+
+#Load logger data
+Logger_clean <- read.delim("Data/Logger_clean.txt", header = T, sep = "\t")
+
+# Monthly means
+Logger_months <- Logger_clean %>%
+  group_by(date, id)%>%
+  summarize(id = as.factor(id),
+            SAL = round(mean(SAL),2),
+            W.T = round(mean(W.T),2),
+            date = as_date(date),
+            day = day,
+            month = month,
+            year = year,
+            Lat = Lat,
+            Long = Long)%>%
+  ungroup()%>%
+  distinct()
+
+IDLogger <- as.vector(unique(Logger_months$id))
+
+for (i in 1:length(IDLogger)) {
+ggsave(paste0(IDLogger[i], ".png"), ggplot(Logger_months[which(Logger_months$id == IDLogger[i]),])+ geom_line(aes(date, SAL), color = "black"), device = "png")
+}
+
+check <- Logger_months%>%filter(id==20813931)
+
+x <- 20813931
+y <- as.Date("2020-03-17")
+z <- as.Date("2020-06-02")
+
+subset <- Logger_months[Logger_months$id == x & Logger_months$date>y &
+                          Logger_months$date<z,]
+subset$waterbody <-"KB"
+subset$type <- "Coast"
+
+Logger_months_clean <- read.delim("Data/Logger_cutoff_daily.txt", sep = "\t", 
+            dec = ".", header = T, stringsAsFactors = F)
+
+write.table(Logger_months_clean, "Data/Logger_cutoff_daily.txt", sep = "\t", 
+            dec = ".", row.names = F)
+
+#Monthly means
+Loggermonths <- Logger_months_clean%>%
+  group_by(id, year, month)%>%
+  summarise(name = "Logger",
+            id = id,
+            waterbody = waterbody,
+            month = month,
+            year = year,
+            identifier = paste0(month,"_", year),
+            Lat = Lat,
+            Long = Long,
+            type = type,
+            SAL = mean(SAL, na.rm = T),
+            WT = mean(W.T, na.rm = T))%>%
+  ungroup()%>%
+  distinct()
+
+write.table(Loggermonths, "Data/Logger_month_means.txt", sep = "\t", 
+            dec = ".", row.names = F)
+```
+
+```{r LUNG months, include=FALSE, eval=FALSE}
+# Script to read in clean LUNG data and convert to monthly means per station
+rm(list = ls())
+
+# read data
+LUNGdata_all <- read.delim("Data/LUNGdata_clean.txt", header = T, stringsAsFactors = F)
+
+LUNGdata_months <- LUNGdata_all %>% 
+  group_by(year, month, id)%>%
+  summarise(name = first(name),
+            id = id,
+            waterbody = first(waterbody),
+            month = month,
+            year = year,
+            Lat = first(Lat),
+            Long = first(Long),
+            type = type,
+            SAL = mean(SAL, na.rm = T),
+            W.T = mean(WT, na.rm = T))%>%
+  ungroup()%>%
+  distinct()
+
+LUNGdata_months%>%filter(year>2011)%>%summarise(range(W.T, na.rm = T))
+
+LUNGdata_monthsw <- LUNGdata_months%>%pivot_wider(names_from = month, values_from = c(SAL, W.T))
+
+LUNGdata_complete <- LUNGdata_months%>%
+  group_by(id, year)%>%
+  transmute(name = name,
+            id = id,
+            waterbody = waterbody,
+            month = month,
+            year = year,
+            identifier = paste0(month,"_", year),
+            Lat = Lat,
+            Long = Long,
+            type = type,
+            SAL = case_when(is.na(SAL)~mean(SAL, na.rm = T),
+                            TRUE ~ SAL),
+            WT = case_when(is.na(W.T)~mean(W.T, na.rm = T),
+                            TRUE ~ W.T))
+
+write.table(LUNGdata_complete, file = "Data/LUNGdata_complete.txt", sep = "\t", row.names = F)
+
+WTF <- LUNGdata_months%>%
+  filter(year == 2020, month == 3, type == "Coast")
+
+filter(LUNGdata_all, year == 2020, type == "Coast", name == "RB9 Glowe sw.")
+
+unique(WTF$name)
+```
+
+```{r clean up d18O data, include=FALSE, eval=FALSE}
+rm(list = ls())
+
+#read in data
+raw_d18O <- read.delim("Data/Water_isotopes_Bodden.txt", sep = "\t", dec = ".",
+                          stringsAsFactors = F)
+
+Bodden_d18O <- raw_d18O%>%
+  transmute(ID=ID,
+            waterbody=waterbody,
+            area=coast.FW,
+            lat=Lat,
+            long=Long,
+            year=lubridate::year(parse_date_time(Date, orders = "dmy")),
+            month=lubridate::month(parse_date_time(Date, orders = "dmy")),
+            SAL=Sal_PSU,
+            WT=WT_C,
+            oxy=O2_mg.l,
+            d18O=d18O,
+            sdO=SD_d18O,
+            d2H=d2H,
+            sdH=SD_d2H,
+            type=type)
+
+#linear model
+lm_d18O <- lm(d18O~SAL, data = Bodden_d18O)
+summary(lm_d18O)
+
+#prepare data for mle
+center_scale <- function(x){
+  scale(x, scale = F)
+}
+
+d18O_trans <- Bodden_d18O%>%
+  filter(area=="Coast")%>%
+  transmute(ID=ID,
+            waterbody=factor(waterbody, levels = c(unique(waterbody))),
+            year=as.factor(year),
+            month=as.factor(month),
+            SAL=SAL,
+            WT=WT,
+            d18O=d18O,
+            sdO=sdO,
+            d2H=d2H,
+            sdH=sdH,
+            type=type)%>%
+  mutate(SALcenter=as.numeric(center_scale(SAL)),
+         Tcenter=as.numeric(center_scale(WT)),
+         d18Ocenter=as.numeric(center_scale(d18O)))
+
+ggplot(d18O_trans[d18O_trans$type=="Timeseries",], aes(SAL, d18O, 
+                                                       color=waterbody))+
+  geom_point()+
+  geom_smooth(method = "lm", se=F)+
+  theme_minimal()
+
+#mixed effects
+m0 <- lmer(d18O~SALcenter+Tcenter+waterbody+month+
+                   (1|year)+(1|ID), data = d18O_trans, na.action = 
+                     na.omit)
+summary(m0)
+m1 <- lmer(d18O~SALcenter+Tcenter+waterbody+
+                   (1|year)+(1|ID), data = d18O_trans, na.action = 
+                     na.omit)
+
+anova(m0, m1)
+
+m2 <- lmer(d18O~Tcenter+waterbody+month+
+                   (1|year)+(1|ID), data = d18O_trans, na.action = 
+                     na.omit)
+anova(m0, m2)
+
+m3 <- lmer(d18O~SALcenter+waterbody+month+
+                   (1|year)+(1|ID), data = d18O_trans, na.action = 
+                     na.omit)
+
+anova(m0, m3)
+
+m4 <- lmer(d18O~SALcenter+Tcenter+month+
+                   (1|year)+(1|ID), data = d18O_trans, na.action = 
+                     na.omit)
+
+anova(m0, m4)
+
+#plot against global meteo line
+
+Meteo <- ggplot()+
+  geom_point(aes(d18O_trans[d18O_trans$type=="Timeseries",]$d18O,
+                 d18O_trans[d18O_trans$type=="Timeseries",]$d2H, 
+                 color=d18O_trans[d18O_trans$type=="Timeseries",]$WT))+
+  geom_line(aes(x=mto$d18O, y=mto$d2H), color="red")+
+  xlim(-7,-3)+ylim(-60,0)+
+  theme_minimal()
+
+Meteo
+
+lm_mto <- lm(d2H~meteoline(d18O), 
+             data = d18O_trans[d18O_trans$type=="Timeseries",])
+
+summary(lm_mto)
+ residuals(lm_mto)
+
+mto <- data.frame(d18O=c(-13:-2))
+mto$d2H <- meteoline(mto$d18O)
+
+plot(d18O_trans[d18O_trans$type=="Timeseries",]$d18O, 
+     d18O_trans[d18O_trans$type=="Timeseries",]$d2H, 
+     type = "p", xlab="d18O", ylab="d2H")
+lines(mto$d18O,mto$d2H, col = "red")
+
+residuals()
+
+```
+
+```{r BH-data, include=FALSE, eval=FALSE}
+# Script to read in opportunistic salinity & temperature measurements from BH-fieldwork
+
+rm(list = ls())
+
+#read in data
+Samplinginstance <- read.delim("Data/1Sampling_Instance_Latest_Version.txt", 
+                               header = T, stringsAsFactors = F, sep = ";")
+
+# cleanup
+Samplinginstance <- Samplinginstance %>%
+  transmute(id = SI_ID,
+            waterbody = Waterbody,
+            date = lubridate::as_date(parse_date_time(Date, orders = "ymd")),
+            day = lubridate::day(parse_date_time(Date, orders = "ymd")),
+            month = lubridate::month(parse_date_time(Date, orders = "ymd")),
+            year = lubridate::year(parse_date_time(Date, orders = "ymd")),
+            Starttime = Starttime,
+            Endtime = Endtime,
+            depth = Depth,
+            Boat_Shore = Boat_Shore,
+            Cap_Lat = Capture_Latitude,
+            Cap_Long = Capture_Longitude,
+            Rel_Lat = Release_Latitude,
+            Rel_Long = Release_Longitude,
+            SAL = Salinity_PSU,
+            CON = Conductivity_myS_cm,
+            WT = Temperature_C,
+            turbidity = Visibility_cm)
+
+# group by date
+Samp_Ins <- Samplinginstance %>%
+  group_by(day, month, year, waterbody, Starttime, Endtime) %>%
+  summarise(id = id,
+            waterbody = waterbody,
+            date = date,
+            day = day,
+            month = month,
+            year = year,
+            Starttime = Starttime,
+            Endtime = Endtime,
+            depth = depth,
+            Boat_Shore = Boat_Shore,
+            Cap_Lat = Cap_Lat,
+            Cap_Long = Cap_Long,
+            Rel_Lat = Rel_Lat,
+            Rel_Long = Rel_Long,
+            SAL = mean(SAL, na.rm = T),
+            CON = mean(CON, na.rm = T),
+            WT = mean(WT, na.rm = T),
+            turbidity = mean(turbidity, na.rm = T))%>%
+  ungroup()%>%
+  distinct()
+
+unique(Samp_Ins$waterbody)
+Creeks <- c("NHG", "Barthe", "Ziese", "Peene", "Badendycksgraben", "Duwenbeek", "Ryck", 
+            "Sehrowbach", "KWB", "Beek")
+
+Samp_Ins$SAL <- ifelse(Samp_Ins$waterbody != c(Creeks) 
+                       & Samp_Ins$SAL == 0, NA, Samp_Ins$SAL)
+Samp_Ins$SAL <- as.numeric(Samp_Ins$SAL)
+Samp_Ins$CON <- as.numeric(Samp_Ins$CON)
+Samp_Ins$WT <- as.numeric(Samp_Ins$WT)
+
+Samp_Sal <- Samp_Ins %>%
+  transmute(waterbody = waterbody,
+            date = date,
+            day = day,
+            month = month,
+            year = year,
+            depth = depth,
+            Boat_Shore = Boat_Shore,
+            Lat = case_when(is.na(Cap_Lat)~Rel_Lat,
+                            is.na(Rel_Lat)~Cap_Lat,
+                            TRUE~Cap_Lat),
+            Long = case_when(is.na(Cap_Long)~Rel_Long,
+                            is.na(Rel_Long)~Cap_Long,
+                            TRUE~Cap_Long),
+            SAL = case_when(is.na(SAL) == TRUE & 
+                              is.na(CON) == FALSE ~ salinity(CON),
+                            TRUE ~ SAL),# not working
+            WT = WT,
+            turbidity = turbidity)
+
+#Filter out missing salinities
+#Get into monthly shape
+
+Samp_months <- Samp_Sal%>%
+  filter(is.na(SAL)==F)%>%#Filter out missing salinities
+  group_by(waterbody)%>%#add missing coordinates
+  summarise(date=date,
+            day = day,
+            month = month,
+            year = year,
+            Lat = case_when(is.na(Lat)~mean(Lat, na.rm = T),
+                            TRUE ~ Lat),
+            Long = case_when(is.na(Long) ~ mean(Long, na.rm = T),
+                             TRUE ~ Long),
+            SAL = SAL,
+            WT = WT)%>%
+  ungroup()%>%
+  group_by(waterbody, month)%>%
+  summarise(year = year,
+            month = month,
+            Lat = Lat,
+            Long = Long,
+            SAL = mean(SAL, na.rm = T),
+            WT = mean(WT, na.rm = T))%>%
+  distinct()
+
+#Final form
+Samp_final <- Samp_months%>%
+  transmute(name = "sampling instance",
+            id = "BH",
+            waterbody = waterbody,
+            month = month,
+            year = year,
+            identifier = paste0(month,"_", year),
+            Lat = Lat,
+            Long = Long,
+            type = case_when(waterbody%in%c(Creeks) ~ "Freshwater",
+                             TRUE ~ "Coast"),
+            SAL = SAL,
+            WT=WT)
+
+#save
+write.table(Samp_final, "Data/Samp_Inst_months.txt", sep = "\t", dec = ".", row.names = F)
+  
+```
+
+```{r salinity function, include=FALSE, eval=FALSE}
+
+C_from_PSU <- function(C, T, P)
+```
+
+# Interpolation shenanigans
+```{r generate land layer, include=FALSE, eval=FALSE}
+rm(list = ls())
+# load data
+Bodden <- readOGR("Data/Bodden_areas_for_R.gpkg")
+Studyarea <- readOGR("Data/Studyarea.gpkg")
+
+Studyarea <- polygons(Studyarea)
+Bodden <- polygons(Bodden)
+
+Land <- gDifference(Studyarea, Bodden)
+
+plot(Studyarea, col = "green")
+plot(Bodden, col = "red", add = T)
+plot(Land)
+```
+
+```{r normal interpolation, include=FALSE, eval=FALSE}
+rm(list = ls())
+
+#load data
+#load in LUNGdata
+LUNGdata_months <- read.delim(file = "Data/LUNGdata_months.txt", sep = "\t", header = T, stringsAsFactors = F)
+#load in Bodden shape
+Bodden <- readOGR("Data/Bodden_shape.shp")
+
+#filter for months
+lung_march_20 <- LUNGdata_months%>%
+  filter(year == 2020, month == 3, type == "Coast", name != "O133 suedl. Greifsw. Oie", 
+         name != "GS Gellenstrom Hiddensee w.")
+xy <- lung_march_20[,c(7,6)]
+dta_march_20 <- SpatialPointsDataFrame(coords = xy, data = lung_march_20, 
+                                        proj4string = CRS("+init=epsg:4326"))
+dta <- spTransform(dta_march_20, CRS("+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs"))
+
+# proximity polygons
+dta2 <- readOGR("Data/April_20_EPSG4326-WGS84_nocreeks.gpkg")
+projection(Bodden)
+projection(dta)
+#get into UTM for interpolation
+dta2 <- spTransform(dta2, CRS("+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs"))
+bod <- spTransform(Bodden, CRS("+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs"))
+plot(bod)
+points(dta, col = "red")
+
+
+cuts <- c(2, 4, 6, 8, 10)
+blues <- colorRampPalette(c("yellow", "orange", "blue", "dark blue"))
+pols <- list("sp.polygons", bod, fill = "lightgray")
+spplot(dta, 'SAL', cuts = cuts, col.regions = blues(6), sp.layout = pols, pch = 20, cex = 2)
+
+#Null model for cross-comparison
+RMSE <- function(observed, predicted){
+  sqrt(mean((predicted - observed)^2, na.rm = T))
+}
+null <- RMSE(mean(dta$SAL), dta$SAL)
+
+v <- voronoi(dta)
+plot(v)
+bodr <- aggregate(bod)
+vbo <- intersect(v, bodr)
+spplot(vbo, "SAL", col.regions = rev(get_col_regions()))
+
+r <- raster(bod, res = 100)
+vr <- rasterize(vbo, r, "SAL")
+plot(vr)
+
+# Nearest neighbour
+gs <- gstat(formula = SAL~1, locations = dta, nmax = 5, set = list(idp = 0))
+nn <- interpolate(r, gs)
+nnmsk <- mask(nn, vr)
+plot(nnmsk)
+
+# IDW
+gs <- gstat(formula = SAL~1, locations = dta)
+idw <- interpolate(r, gs)
+idwr <- mask(idw, vr)
+plot(idwr)
+points(dta, col = "red")
+plot(idw)
+#Crossvalidation
+kf <- kfold(nrow(dta))
+rmse <- rep(NA, 5)
+for (k in 1:5) {
+  test <- dta[kf == k, ]
+  train <- dta[kf != k, ]
+  gs <- gstat(formula=SAL~1, locations=train)
+  p <- predict(gs, test)
+  rmse[k] <- RMSE(test$SAL, p$var1.pred)
+}
+1 - (mean(rmse) / null)
+
+# load receivers
+Rec <- read.csv2("Data/Rec-Arrays_ALL.csv", header = T, stringsAsFactors = F, sep = ",")
+Rec$Longitude <- as.numeric(Rec$Longitude)
+Rec$Latitude <- as.numeric(Rec$Latitude)
+rec_xy <- Rec[,1:2]
+rec_sp <- SpatialPointsDataFrame(coords = rec_xy, data = Rec, 
+                                        proj4string = CRS("+init=epsg:4326"))
+rec_sp <- spTransform(rec_sp, CRS("+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs"))
+
+plot(idwr)
+points(rec_sp, col = "red")
+
+rec_sp$SAL <- extract(idwr, rec_sp, buffer = 1000, small = T)
+extract
+rec_sp[76:77,]$SAL
+#Rasterstack, try to access it (in raster package, list or stack)
+```
+
+```{r salinity interpolation test, include=FALSE, eval=FALSE}
+rm(list = ls())
+
+#load in data
+pols <- readOGR(system.file("extdata/kattegat_coast.gpkg", package = "ipdw"))#This is 
+projection(pols)
+#land data
+pnts <- readOGR(system.file("extdata/kattegat_pnts.gpkg", package = "ipdw"))#Point
+projection(pnts)
+#measurments
+
+Bodden <- readOGR("Data/Bodden_areas_for_R.gpkg")
+
+plot(pols, col = "green")
+points(pnts, col = "red")
+plot(Bodden)
+
+costras <- costrasterGen(pnts, pols, extent = "pnts", projstr = projection(pols)) #this is a costraster for land
+plot(costras)
+#costras[160:170, 1:80] <- 10000 #inserting a contiguous barrier
+
+#average nearest neighbor
+W <- owin(range(coordinates(pnts)[,1]), range(coordinates(pnts)[,2]))
+kat.pp <- ppp(coordinates(pnts)[,1], coordinates(pnts)[,2], window = W)
+mean.neighdist <- mean(nndist(kat.pp))
+
+#build a grid
+gridsize <- mean.neighdist*2
+grainscale.fac <- gridsize/res(costras)[1]
+gridras <- aggregate(costras, fact = grainscale.fac)
+gridpol <- rasterToPolygons(gridras)
+gridpol$value <- row.names(gridpol)
+
+#spatial join
+fulldataset.over <- over(pnts, gridpol)
+fulldataset.over <- cbind(data.frame(fulldataset.over), 
+                          setNames(data.frame(pnts), c("id", "salinity", "x.utm", "y.utm",
+                                                       "optional")))
+
+#grid selection
+set.seed(2)
+gridlev <- unique(fulldataset.over$value)
+
+#split in training & validation data sets
+for (i in seq_along(gridlev)) {
+  activesub <- subset(fulldataset.over, fulldataset.over$value == gridlev[i])
+  selectnum <- gdata::resample(seq_len(nrow(activesub)), 1)
+  if(i == 1){
+    training <- activesub[selectnum,]
+  }
+  else{
+    training <- rbind(training, activesub[selectnum,])
+  }
+}
+
+#save training & validation in spatial points dataframe
+validate <- fulldataset.over[!(row.names(fulldataset.over)%in%
+                                 row.names(training)),]
+xy <- cbind(training$x.utm, training$y.utm)
+training <- SpatialPointsDataFrame(xy, training)
+xy <- cbind(validate$x.utm, validate$y.utm)
+validate <- SpatialPointsDataFrame(xy, validate)
+projection(training) <- projection(pnts) #calculations within ipdw require projected data
+projection(validate) <- projection(pnts)
+
+plot(costras) #mark and execute all in order to work
+points(training)
+points(validate, col = "red")
+
+#interpolation
+paramlist <- c("salinity")
+final.ipdw <- ipdw(training, costras, range = mean.neighdist*10, paramlist, overlapped = T)
+plot(final.ipdw, main = "Kattegat salinity (ppt)")
+```
+
+```{r salinity interpolation, include=FALSE, eval=FALSE}
+rm(list = ls())
+#load in LUNGdata
+LUNGdata_months <- read.delim(file = "Data/LUNGdata_months.txt", sep = "\t", header = T, stringsAsFactors = F)
+
+
+#filter for months
+lung_april_20 <- LUNGdata_months%>%
+  filter(year == 2020, month == 3, type == "Coast")
+
+xy <- lung_april_20[,c(7,6)]
+lung_april_20 <- SpatialPointsDataFrame(coords = xy, data = lung_april_20, 
+                                        proj4string = CRS("+init=epsg:4326"))
+pnts <- spTransform(lung_april_20, CRS("+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs"))
+
+#load from file
+pnts <- readOGR("Data/LUNG_points_UTM33.shp")
+projection(pnts)
+
+#load in land
+Land <- readOGR("Data/Rügen_landcover_simplified_1Pol.gpkg")
+projection(Land)
+
+Land <- Land[-5,]
+
+ 
+
+Land <- spTransform(Land, CRS("+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs"))
+
+Land <- aggregate(Land, fact = 100)
+
+pnts <- spTransform(pnts, CRS("+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs"))
+
+projection(Land)
+projection(pnts)
+
+plot(Land, col = "green")
+points(pnts, col = "red")
+
+#costraster
+costras <- costrasterGen(pnts, Land, extent = "polys", resolution = c(1000, 1000),
+                         projstr = projection(Land))
+
+#plotting
+plot(costras)
+points(pnts, col = "red")
+
+#average nearest neighbor
+W <- owin(range(coordinates(pnts)[,1]), range(coordinates(pnts)[,2]))
+kat.pp <- ppp(coordinates(pnts)[,1], coordinates(pnts)[,2], window = W)
+mean.neighdist <- mean(nndist(kat.pp))
+
+#build a grid
+gridsize <- mean.neighdist*2
+grainscale.fac <- gridsize/res(costras)[1]
+gridras <- aggregate(costras, fact = grainscale.fac)
+gridpol <- rasterToPolygons(gridras)
+gridpol$value <- row.names(gridpol)
+
+#spatial join
+fulldataset.over <- over(pnts, gridpol)
+fulldataset.over <- cbind(data.frame(fulldataset.over), 
+                          setNames(data.frame(pnts), c("year", "month", "id",
+                                                       "Lat", "Long", "salinity",
+                                                       "temperature", 
+                                                       "x.utm", "y.utm")))
+
+#grid selection
+set.seed(2)
+gridlev <- unique(fulldataset.over$value)
+
+#split in training & validation data sets
+for (i in seq_along(gridlev)) {
+  activesub <- subset(fulldataset.over, fulldataset.over$value == gridlev[i])
+  selectnum <- gdata::resample(seq_len(nrow(activesub)), 1)
+  if(i == 1){
+    training <- activesub[selectnum,]
+  }
+  else{
+    training <- rbind(training, activesub[selectnum,])
+  }
+}
+
+#save training & validation in spatial points dataframe
+validate <- fulldataset.over[!(row.names(fulldataset.over)%in%
+                                 row.names(training)),]
+xy <- cbind(training$x.utm, training$y.utm)
+training <- SpatialPointsDataFrame(xy, training)
+xy <- cbind(validate$x.utm, validate$y.utm)
+validate <- SpatialPointsDataFrame(xy, validate)
+projection(training) <- projection(pnts) #calculations within ipdw require projected data
+projection(validate) <- projection(pnts)
+
+plot(costras) #mark and execute all in order to work
+points(training)
+points(validate, col = "red")
+
+#interpolation
+paramlist <- c("salinity")
+final.ipdw <- ipdw(training, costras, range = mean.neighdist*10, paramlist, overlapped = T)
+plot(final.ipdw, main = "Bodden salinity")
+```
+
+```{r ipdw loop, include=FALSE, eval=FALSE}
+
+rm(list = ls())
+#load in LUNGdata
+LUNGdata <- read.delim(file = "Data/LUNGdata_complete.txt", sep = "\t", header = T, stringsAsFactors = F)
+
+#load BH-data
+Samplingdata <- read.delim(file = "Data/Samp_Inst_months.txt", sep = "\t", header = T, stringsAsFactors = F)
+
+#load Logger data
+Loggerdata <- read.delim(file = "Data/Logger_month_means.txt", sep = "\t", header = T, stringsAsFactors = F)
+
+#Bring all into same format, LUNG data
+LUNGdata <- LUNGdata%>%
+  transmute(name = name,
+            id = id,
+            waterbody = waterbody,
+            month = month,
+            year = year,
+            identifier = paste0(month, "_", year),
+            Lat = Lat,
+            Long = Long,
+            type = type,
+            SAL = SAL,
+            WT = WT)
+
+#BH sampling
+Samplingdata <- Samplingdata%>%
+  transmute(name = name,
+            id = id,
+            waterbody = waterbody,
+            month = month,
+            year = year,
+            identifier = paste0(month, "_", year),
+            Lat = Lat,
+            Long = Long,
+            type = type,
+            SAL = SAL,
+            WT = WT)
+
+#Logger
+Loggerdata <- Loggerdata%>%
+  transmute(name = name,
+            id = id,
+            waterbody = waterbody,
+            month = month,
+            year = year,
+            identifier = identifier,
+            Lat = Lat,
+            Long = Long,
+            type = type,
+            SAL = SAL,
+            WT = WT)
+
+#Join & filter out feshwater
+Saldata <- rbind(LUNGdata, Samplingdata, Loggerdata)
+Saldata <- Saldata%>%filter(type == "Coast" & 
+                              year==2019|year == 2020|year == 2021)%>%
+  filter(month==7)
+
+#load in receiver for later checking accessibility of rasterstack
+Rec <- read.csv2("Data/Rec-Arrays_ALL.csv", header = T, 
+                 stringsAsFactors = F, sep = ",")
+Rec$Longitude <- as.numeric(Rec$Longitude)
+Rec$Latitude <- as.numeric(Rec$Latitude)
+rec_xy <- Rec[,1:2]
+rec_sp <- SpatialPointsDataFrame(coords = rec_xy, data = Rec, 
+                                        proj4string = CRS("+init=epsg:4326"))
+rec_sp <- spTransform(rec_sp, CRS("+proj=utm +zone=33 +ellps=GRS80 
+                                  +units=m +no_defs"))
+
+#load in land layer
+Land <- readOGR("Data/Rügen_landcover_simplified_1Pol.gpkg")
+#transform to UTM (meters)
+Land <- spTransform(Land, CRS("+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs"))
+            
+#DEf
+monthID <- unique(Saldata$identifier)
+tras <- stack()
+mras <- stack()
+validation <- NULL
+
+for (i in 1:length(monthID)) {
+    #select data (month & year through identifier)
+    df <- Saldata[which(Saldata$identifier == monthID[i]),]
+    
+    #generate coordinates, make sure format is Long-Lat
+    xy <- df[,c(8,7)]
+    
+    #convert to spatial points
+    pnts <- SpatialPointsDataFrame(coords = xy, data = df,
+                                   proj4string = CRS("+init=epsg:4326"))
+    pnts <- spTransform(pnts, CRS("+proj=utm +zone=33 +ellps=GRS80 
+                                           +units=m +no_defs"))
+    
+    #generate costraster, resolution in m
+    costras <- costrasterGen(pnts, Land, extent = "polys", 
+                             resolution = c(250, 250),
+                             projstr = projection(Land))
+    
+    #mean neighbor distance
+    W <- owin(range(coordinates(pnts)[,1]), range(coordinates(pnts)[,2]))
+    kat.pp <- ppp(coordinates(pnts)[,1], coordinates(pnts)[,2], window = W)
+    mean.neighdist <- mean(nndist(kat.pp))
+    
+    #build grid
+    gridsize <- mean.neighdist*2
+    grainscale.fac <- gridsize/res(costras)[1]
+    gridras <- aggregate(costras, fact = grainscale.fac)
+    gridpol <- rasterToPolygons(gridras)
+    gridpol$value <- row.names(gridpol)
+    
+    #spatial join
+    fulldataset.over <- over(pnts, gridpol)
+    fulldataset.over <- cbind(data.frame(fulldataset.over), 
+                          setNames(data.frame(pnts), c("name", "id",
+                                                       "waterbody","month",
+                                                       "year","identifier",
+                                                       "Lat", "Long", "type",
+                                                       "SAL", "WT",
+                                                       "x.utm","y.utm")))
+    #grid selection
+    set.seed(2)
+    gridlev <- unique(fulldataset.over$value)
+    #split in training & validation data sets
+    for (i in seq_along(gridlev)) {
+      activesub <- subset(fulldataset.over, fulldataset.over$value
+                          ==gridlev[i])
+      selectnum <- gdata::resample(seq_len(nrow(activesub)), 1)
+      if(i == 1){
+        training <- activesub[selectnum,]
+        }
+      else{
+        training <- rbind(training, activesub[selectnum,])
+      }
+    }
+    
+    #save training & validation data frames as spatial points data frame
+    validate <- fulldataset.over[!(row.names(fulldataset.over)%in%
+                                 row.names(training)),]
+    xyu <- cbind(training$x.utm, training$y.utm)
+    training <- SpatialPointsDataFrame(xyu, training)
+    xyu <- cbind(validate$x.utm, validate$y.utm)
+    validate <- SpatialPointsDataFrame(xyu, validate)
+    
+    #ipdw calculations require projected data, make sure projections match
+    projection(training) <- projection(pnts)
+    projection(validate) <- projection(pnts)
+    paramlist <- c("WT")
+    
+    #perform ipdw, set name to month & year
+    ipdw <- ipdw(training, costras, range = mean.neighdist*10, 
+                       paramlist, overlapped = T)
+    ipdw <- setNames(ipdw[[1]], paste(unique(df$year), "Month",
+                                      unique(df$month)))
+    
+    #error estimation, generate data frame containing measured & interpolated
+    measured.spdf <- data.frame(validate@data[12:14])
+    coordinates(measured.spdf) <- coordinates(validate)
+    
+    #claculate simple measurement error metrics, name after year & month
+    valid.ipdw <- errorGen(ipdw, measured.spdf, measured.spdf@data)
+    valid.ipdw$id <- paste(unique(df$year),"Month", unique(df$month))
+    
+    #save measurement errors in list
+    validation <- c(validation, valid.ipdw)
+    #save interpolations into rasterstack
+    tras <- stack(tras, ipdw)
+}
+
+#example for simple error comparison between prediction & measured
+valid <- lm(validation[[11]]$SAL ~ validation[[11]]$predicted)
+summary(valid)
+
+#This extracts salinity values from around the receivers and forms a mean
+monthID <- unique(yras)
+for (i in 1:length(month)) {
+  
+}
+raster::extract(yras, rec_sp, buffer = 500, small = T, fun = mean, na.rm = T)
+
+#save to RData
+save(yras, validation, file = "Data/IPDW_results.RData")
+load("Data/Olga Salinity interpolation/Data/IPDW_results.RData")
+
+meanRast2 <- calc(tras, fun = mean)
+Trange <- meanRast2-meanRast
+
+##Here you left, now look for those fucked up Temp data
+
+writeRaster(Trange, "Data/Temp-ipdw_range_19-21", format="GTiff")
+
+```
+
+# WTF?
+```{r Sr data conversion, include=FALSE, eval=FALSE}
+Sr_convert <- function(x){
+  ((x/1000)/87.62)/40.078
+}
+```
+# Clustering
+## Data prep
+```{r marry d18O data to Sr, include=FALSE}
+#Read in LA-ICPMS and SIMS data
+rm(list = ls())
+
+LA <- read.delim("Data/pike_data_LA-ICPMS_years_with_core.txt", 
+                 header = T, stringsAsFactors = F, sep = "\t", dec = ".")
+
+LA <- LA%>%
+  filter(LA_dist>=50)%>%
+  transmute(ID = ID,
+            age=age,
+            capt = area,
+            area = case_when(area %in% "Peene" ~ "Freshwater",
+                             area %in% "Barthe" ~ "Freshwater",
+                             area %in% "NHG" ~ "Freshwater",
+                             area %in% "Sehrowbach" ~ "Freshwater",
+                             area %in% "Bandycksgraben" ~ "Freshwater",
+                             area %in% "Ziese" ~ "Freshwater",
+                             area %in% "KB" ~ "WRB",
+                             area %in% "SB" ~ "WRB",
+                             area %in% "WB" ~ "NRB",
+                             area %in% "BEG" ~ "NRB", 
+                             area %in% "KJB" ~ "NRB",
+                             area %in% "GJB" ~ "NRB",
+                             area %in% "GB" ~ "GB",
+                             area %in% "KD" ~ "control",
+                             TRUE ~ "NA"),
+            Sr = Sr,
+            Na = Na,
+            Mg = Mg,
+            Ba = Ba,
+            Mn = Mn,
+            LA_dist = LA_dist,
+            year=year)
+
+d18O <- read.delim("Data/pike_data_d18O_years.txt", header = T,
+                stringsAsFactors = F, sep = "\t", dec = ".")
+
+d18O <- d18O%>%
+  transmute(ID = ID,
+            age=age,
+            capt = area,
+            area = case_when(area %in% "Peene" ~ "Freshwater",
+                             area %in% "Barthe" ~ "Freshwater",
+                             area %in% "NHG" ~ "Freshwater",
+                             area %in% "Sehrowbach" ~ "Freshwater",
+                             area %in% "Bandycksgraben" ~ "Freshwater",
+                             area %in% "Ziese" ~ "Freshwater",
+                             area %in% "KB" ~ "WRB",
+                             area %in% "SB" ~ "WRB",
+                             area %in% "WB" ~ "NRB",
+                             area %in% "BEG" ~ "NRB", 
+                             area %in% "KJB" ~ "NRB",
+                             area %in% "GJB" ~ "NRB",
+                             area %in% "GB" ~ "Marine",
+                             area %in% "KD" ~ "Control",
+                             TRUE ~ "NA"),
+            d18O = d18O,
+            sims_dist = sims_dist,
+            year=year)
+
+LA <- LA %>% drop_na()
+
+LA_smooth <- LA%>%group_by(ID)%>%
+  transmute(ID=ID,
+            age=age,
+            capt=capt,
+            area=area,
+            Sr=as.numeric(zoo::rollmean(Sr, k=9, fill=NA, align = "left")),
+            Na=as.numeric(zoo::rollmean(Na, k=9, fill=NA, align = "left")),
+            Mg=as.numeric(zoo::rollmean(Mg, k=9, fill=NA, align = "left")),
+            Ba=as.numeric(zoo::rollmean(Ba, k=9, fill=NA, align = "left")),
+            Mn=as.numeric(zoo::rollmean(Mn, k=9, fill=NA, align = "left")),
+            LA_dist=as.numeric(LA_dist),
+            year=year)
+
+d18O <- d18O[order(d18O$ID),]
+LA <- LA[order(LA$ID),]
+LA_smooth <- LA_smooth[order(LA_smooth$ID),]
+LA_smooth <- data.frame(LA_smooth)
+
+#reinterpolate d18O to Sr distances for joining
+IDOto <- unique(d18O$ID)
+dfO <- data.frame()
+
+for (i in 1:length(IDOto)) {
+  d <- data.frame(approx(d18O[which(d18O$ID==IDOto[i]),"sims_dist"],
+              d18O[which(d18O$ID==IDOto[i]),"d18O"],
+              xout = LA[which(LA$ID==IDOto[i]),"LA_dist"],
+              rule = 1, method = "constant", ties = "ordered"))
+  dfO <- rbind(dfO,d)
+}
+
+
+#reinterpolate Sr to d18O distances for joining
+dfE <- data.frame()
+for (i in 1:length(IDOto)) {
+  Sr <- data.frame(approx(LA_smooth[which(LA_smooth$ID==IDOto[i]),"LA_dist"],
+              LA_smooth[which(LA_smooth$ID==IDOto[i]),"Sr"],
+              n = length(d18O[which(d18O$ID==IDOto[i]),"sims_dist"]),
+              rule = 1, method = "linear", ties = "ordered"))
+  Na <- data.frame(approx(LA_smooth[which(LA_smooth$ID==IDOto[i]),"LA_dist"],
+              LA_smooth[which(LA_smooth$ID==IDOto[i]),"Na"],
+              n = length(d18O[which(d18O$ID==IDOto[i]),"sims_dist"]),
+              rule = 1, method = "linear", ties = "ordered"))
+  Mg <- data.frame(approx(LA_smooth[which(LA_smooth$ID==IDOto[i]),"LA_dist"],
+              LA_smooth[which(LA_smooth$ID==IDOto[i]),"Mg"],
+              n = length(d18O[which(d18O$ID==IDOto[i]),"sims_dist"]),
+              rule = 1, method = "linear", ties = "ordered"))
+  Ba <- data.frame(approx(LA_smooth[which(LA_smooth$ID==IDOto[i]),"LA_dist"],
+              LA_smooth[which(LA_smooth$ID==IDOto[i]),"Ba"],
+              n = length(d18O[which(d18O$ID==IDOto[i]),"sims_dist"]),
+              rule = 1, method = "linear", ties = "ordered"))
+  Mn <- data.frame(approx(LA_smooth[which(LA_smooth$ID==IDOto[i]),"LA_dist"],
+              LA_smooth[which(LA_smooth$ID==IDOto[i]),"Mn"],
+              n = length(d18O[which(d18O$ID==IDOto[i]),"sims_dist"]),
+              rule = 1, method = "linear", ties = "ordered"))
+  df <- cbind(Sr=Sr[,2], Na=Na[,2], Mg=Mg[,2], Ba=Ba[,2], Mn=Mn[,2])
+  dfE <- rbind(dfE,df)
+}
+
+LA$d18O <- dfO$y
+
+otoint_highres <- LA
+otoint_lowres <- cbind(d18O, dfE)
+
+#Get residuals from d18O ~ Sr
+subset_KD <- subset(otoint_lowres, capt=="KD")
+subset_KD$res <- NA
+otoint_lowres <- otoint_lowres%>%drop_na()%>%filter(capt!="KD")
+
+lm1 <- lm(d18O~Sr, data = otoint_lowres)
+summary(lm1)
+
+otoint_lowres$res <- lm1$residuals
+otoint_lowres <- rbind(otoint_lowres, subset_KD)
+
+plot(otoint_lowres[otoint_lowres$ID=="BH-01889",]$sims_dist, otoint_lowres[otoint_lowres$ID=="BH-01889",]$res, type="l")
+
+#get d18O points per year
+d18Oyears <- read.delim("Data/pike_data_d18O_years.txt", sep = "\t", dec = ".",
+                        header = T, stringsAsFactors = F)
+
+d18Oyears$year <- as.factor(d18Oyears$year)
+
+yearmean <- d18Oyears%>%group_by(ID,year)%>%summarise(n=n())
+mean(yearmean$n)
+#mean of 7.6 so smooth with 7 or 8
+
+otoint_lowres <- otoint_lowres%>%
+  group_by(ID)%>%
+  transmute(ID=ID,
+            age=age,
+            capt=capt,
+            area=area,
+            d18O=zoo::rollmean(d18O, k=7, fill = NA, align = "left"),
+            res=zoo::rollmean(res, k=7, fill = NA, align = "left"),
+            Sr=Sr,
+            Na=Na,
+            Mg=Mg,
+            Ba=Ba,
+            Mn=Mn,
+            year=year,
+            dist=sims_dist)%>%
+  drop_na()
+
+plot(otoint_lowres[otoint_lowres$ID=="BH-01906",]$dist, otoint_lowres[otoint_lowres$ID=="BH-01906",]$d18O, type="l")
+
+
+write.table(otoint_highres, "Data/Otoliths/Oto_d18O-to-LA_interpolation.txt", 
+            row.names = F,dec = ".", sep = "\t")
+
+write.table(otoint_lowres, "Data/Otoliths/Oto_LA-to-d18O_interpolation.txt", 
+            row.names = F,dec = ".", sep = "\t")
+```
+
+```{r covariance d18O and Sr}
+#Read in data
+rm(list = ls())
+
+Elements <- read.delim("Data/Otoliths/Oto_LA-to-d18O_interpolation.txt",
+                       header = T, stringsAsFactors = F,
+                       dec = ".", sep = "\t")
+
+#clean up
+Oto_lowres <- Elements%>%
+  filter(capt!="KD")%>%
+  transmute(ID=ID,
+            capt=capt,
+            area=area,
+            dist=dist,
+            Sr=Sr,
+            d18O=d18O)%>%
+  drop_na()
+
+#plot high signal fish
+Testfish1 <- Oto_lowres%>%filter(ID=="BH-90946")
+Testfish2 <- Oto_lowres%>%filter(ID=="BH-91050")
+Testfish3 <- Oto_lowres%>%filter(ID=="BH-90928")
+Testfish4 <- Oto_lowres%>%filter(ID=="BH-01882")
+Testfish5 <- Oto_lowres%>%filter(ID=="BH-01868")
+Testfish6 <- Oto_lowres%>%filter(ID=="BH-01585")
+
+P1 <- ggplot(Testfish1,aes(x=Sr, y=d18O))+
+  geom_point()+
+  labs(x="Sr/Ca (ppt)", y="d18O (permill)", 
+       title="BH-90946, freshwater, likely anadromous")+
+  ylim(-11,-3)+xlim(0,0.007)+
+  theme_minimal()
+P2 <- ggplot(Testfish2,aes(x=Sr, y=d18O))+
+  geom_point()+
+  labs(x="Sr/Ca (ppt)", y="d18O (permill)",
+       title = "BH-91050, freshwater, likely anadromous")+
+  ylim(-11,-3)+xlim(0,0.007)+
+  theme_minimal()
+P3 <- ggplot(Testfish3,aes(x=Sr, y=d18O))+
+  geom_point()+
+  labs(x="Sr/Ca (ppt)", y="d18O (permill)",
+       title = "BH-90928, freshwater, likely anadromous")+
+  ylim(-11,-3)+xlim(0,0.007)+
+  theme_minimal()
+P4 <- ggplot(Testfish4,aes(x=Sr, y=d18O))+
+  geom_point()+
+  labs(x="Sr/Ca (ppt)", y="d18O (permill)",
+       title = "BH-01882, Bodden, likely resident")+
+  ylim(-11,-3)+xlim(0,0.007)+
+  theme_minimal()
+P5 <- ggplot(Testfish5,aes(x=Sr, y=d18O))+
+  geom_point()+
+  labs(x="Sr/Ca (ppt)", y="d18O (permill)",
+       title = "BH-01868, Bodden, likely resident")+
+  ylim(-11,-3)+xlim(0,0.007)+
+  theme_minimal()
+P6 <- ggplot(Testfish6,aes(x=Sr, y=d18O))+
+  geom_point()+
+  labs(x="Sr/Ca (ppt)", y="d18O (permill)",
+       title = "BH-01585, Bodden, likely resident")+
+  ylim(-11,-3)+xlim(0,0.007)+
+  theme_minimal()
+ggarrange(P1,P2,P3,P4,P5,P6)
+
+png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Geschwafel/Lab-meeting-11-07-22/d18O_Sr_cova.jpg", width = 1200, height = 800)
+ggplot(Oto_lowres,aes(x=Sr, y=d18O))+
+  geom_point()+
+  labs(x="Sr/Ca (ppt)", y="d18O (permill)")+
+  geom_smooth(method = "lm")+
+  theme_minimal()+
+    theme(axis.text = element_text(size = 25),
+        axis.title = element_text(size = 25),
+        legend.text = element_text(size = 25),
+        legend.title = element_text(size = 25))
+dev.off()
+
+Oto_lowres <- Oto_lowres%>%drop_na()
+
+lm1 <- lm(d18O~Sr, data = Oto_lowres)
+summary(lm1)
+
+par(mfrow=c(1,2))
+plot(Oto_lowres[Oto_lowres$ID=="BH-00355",]$dist,
+     Oto_lowres[Oto_lowres$ID=="BH-00355",]$d18O, 
+     type="l", xlab="Distance um", ylab="d18O")
+plot(Oto_lowres[Oto_lowres$ID=="BH-00355",]$dist,
+     Oto_lowres[Oto_lowres$ID=="BH-00355",]$res, 
+     type="l", xlab="Distance um", ylab="d18O_res")
+```
+
+## Model-based preclustering
+```{r preclustering with means, echo=FALSE, warning=FALSE, message=FALSE, dpi=600}
+rm(list = ls())
+#read in data
+oto_highres <- read.delim("Data/Otoliths/Oto_d18O-to-LA_interpolation.txt",
+                         header = T, dec = ".", sep = "\t",
+                         stringsAsFactors = F)
+oto_lowres <- read.delim("Data/Otoliths/Oto_LA-to-d18O_interpolation.txt",
+                         header = T, dec = ".", sep = "\t",
+                         stringsAsFactors = F)
+
+#Clustering step 1: model based clustering
+#Form means
+Elemeans <- oto_highres%>%
+  group_by(ID)%>%
+  na.omit()%>%
+  summarise(ID=ID,
+            area=area,
+            Sr=mean(Sr),
+            Na=mean(Na),
+            Mg=mean(Mg),
+            Ba=mean(Ba),
+            Mn=mean(Mn),
+            d18O=mean(d18O))%>%
+  distinct()
+
+#Scale means
+Elemeans[,3:8] <- scale(Elemeans[,3:8])
+
+#model-based clustering
+fit <- Mclust(Elemeans[,c(3,8)])
+
+par(mar=c(5,5,1,1))
+plot(fit, what = "BIC", xlab="Number of clusters", 
+     legendArgs=list(x="topright", ncol=2, cex=0.5, inset=0.01),
+     cex.lab=3)
+
+par(mar=c(5,6,1,1))
+plot(fit, what = "classification", 
+     ylab=expression(delta^18*"O (normalized)"),
+     xlab="Sr/Ca (normalized)", cex.lab=2, cex.axis=2, cex=2)
+
+plot(fit, what = "uncertainty")
+plot(fit, what = "density")
+summary(fit)
+
+fit2 <- Mclust(Elemeans[,c(3,8)], G=3, modelNames = "VEE")
+
+Elemeans$clust <- as.factor(fit2$classification)
+
+#jpeg(file="C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Geschwafel/Lab-meeting-11-07-22/Cluster_capt_2.jpg", width = 1200, height = 800)
+ggplot(Elemeans, aes(d18O, Sr, color=area, shape=clust))+
+  labs(x=expression(delta^18*"O (normalized)"), y="Sr/Ca", shape="Cluster")+
+  geom_point(size=3)+
+  theme_minimal()+
+  theme(axis.title = element_text(size = 25), 
+        axis.text = element_text(size = 25),
+        legend.text = element_text(size = 25),
+        legend.title = element_text(size = 25))+
+  scale_color_manual(name="Capture location", 
+                     breaks = c("WRB", "NRB", "GB", "Freshwater", "control"),
+                     values = brewer.pal(5, "Dark2"))
+#dev.off()
+
+#Assign clusters to timeseries
+ClustID <- Elemeans[,c(1,9)]
+
+write.table(ClustID, file = "Data/Otoliths/Precluster_assign.txt",
+            sep = "\t", dec = ".", row.names = F)
+
+oto_highres <- oto_highres%>%
+  inner_join(ClustID, by = "ID")%>%
+  group_by(ID)%>%
+  na.omit()%>%
+  transmute(ID=ID,
+            age=age,
+            capt=capt,
+            area=area,
+            dist=LA_dist,
+            clust=clust,
+            Sr=zoo::rollmean(Sr, k=9, fill=NA),
+            Na=zoo::rollmean(Na, k=9, fill=NA),
+            Mg=zoo::rollmean(Mg, k=9, fill=NA),
+            Ba=zoo::rollmean(Ba, k=9, fill=NA),
+            Mn=zoo::rollmean(Mn, k=9, fill=NA),
+            d18O=zoo::rollmean(d18O, k=21, fill=NA),
+            year=year)%>%
+  na.omit()
+
+oto_lowres <- oto_lowres%>%
+  inner_join(ClustID, by = "ID")%>%
+  group_by(ID)%>%
+  na.omit()%>%
+  transmute(ID=ID,
+            age=age,
+            capt=capt,
+            area=area,
+            clust=clust,
+            d18O=d18O,
+            d18O_res=res,
+            Sr=Sr,
+            Na=Na,
+            Mg=Mg,
+            Ba=Ba,
+            Mn=Mn,
+            year=year,
+            dist=dist)
+
+#Test mean length of transect (data points)
+summary(count(oto_highres, "ID"))
+
+#Function to reinterpolate an element to a specified length
+interpol <- function(series, length, element){
+  ids <- NULL
+  values <- NULL
+  
+  IDOto <- unique(series$ID)
+  
+  for (i in 1:length(IDOto)) {
+    id <- rep(IDOto[i], length.out=length)
+    value <- approx(series[which(series$ID==IDOto[i]), element],
+                      method = "linear", n=length, rule = 2)[2]
+    ids <- c(ids, id)
+    values <- unlist(c(values, value))
+    }
+  
+  data.frame(ID=ids, value=values)
+  
+}
+
+#Test function
+Srall <- interpol(series = oto_highres, length = 250, element = "Sr")
+d18Oall <- interpol(series = oto_highres, length = 250, element = "d18O")
+
+Srd18O <- cbind(Srall, d18Oall[,2])
+colnames(Srd18O) <- c("ID", "Sr", "d18O")
+
+
+#compare pattern retention
+par(mfrow=c(1,2))
+plot(oto_highres[oto_highres$ID=="BH-91045",]$dist,
+     oto_highres[oto_highres$ID=="BH-91045",]$Sr, type="l",
+     xlab="Distance (um)", ylab="Sr/Ca")
+plot(row_number(Srd18O[Srd18O$ID=="BH-91045",]$ID),
+     Srd18O[Srd18O$ID=="BH-91045",]$Sr, type="l",
+     xlab="transect cell", ylab="Sr/Ca")
+
+#subset according to cluster
+Fclust_lowres <- subset(oto_lowres, clust==1)
+Fclust_highres <- subset(oto_highres, clust==1)
+Bclust_lowres <- subset(oto_lowres, clust==2)
+Bclust_highres <- subset(oto_highres, clust==2)
+
+#data package
+save(Fclust_lowres,Bclust_lowres,Fclust_highres, Bclust_highres,interpol,
+     file = "Data/Otoliths/Adults_element_transects.RData")
+```
+
+```{r get best clustering method, include=FALSE, eval=FALSE}
+rm(list = ls())
+#read in data
+Freshwater <- read.delim("Data/Otoliths/Freshwater-cluster.txt",
+                         header = T, sep = "\t", dec = ".",
+                         stringsAsFactors = F)
+
+Bodden <- read.delim("Data/Otoliths/Bodden-cluster.txt",
+                         header = T, sep = "\t", dec = ".",
+                         stringsAsFactors = F)
+Bodden <- Bodden%>%filter(ID!="BH-01908")
+
+#make into list of matrices
+IDOto <- unique(Bodden$ID)
+
+series <- list()
+for (i in 1:length(IDOto)) {
+  m <- as.matrix(Bodden[which(Bodden$ID==IDOto[i]),c(5)])
+  series[[length(series)+1]] <- m
+}
+
+names(series) <- c(IDOto)
+labels <- NULL
+Boddenlabels <- for (i in 1:length(IDOto)) {
+  ind <- unique(Bodden[which(Bodden$ID==IDOto[i]), "area"])
+  labels = c(labels, ind)
+}
+
+acf_fun <- function(series, ...) {
+lapply(series, function(x) {
+as.numeric(acf(x, lag.max = 50, plot = FALSE)$acf)
+})
+}
+
+
+cfgs <- compare_clusterings_configs(
+  types = c("h","t","f"),
+  k = 2L,
+  controls = list(hierarchical = hierarchical_control(method = "all"),
+                tadpole = tadpole_control(dc = c(1.5,2), window.size = 5L),
+                fuzzy = fuzzy_control(fuzziness = c(2,2.5),iter.max = 30L)
+                ),
+  preprocs = pdc_configs("preproc", none = list(),
+                       zscore = list(center = c(FALSE)),
+                       fuzzy = list(acf_fun=list()),
+                       share.config = c("h", "t")
+                       ),
+  distances = pdc_configs("distance",
+                        dtw=list(),fuzzy = list(L2 = list()),
+                        share.config = c("h")
+                        ),
+  centroids = pdc_configs("centroid", hierarchical = list(default = list()),
+                        fuzzy = list(fcmdd = list()),
+                        tadpole = list(default = list(), 
+                                       shape_extraction =list(znorm = TRUE)
+                                       )
+                        ),
+  )
+
+num_configs <- sapply(cfgs, attr, which = "num.configs")
+cat("\nTotal number of configurations without considering optimizations:",
+sum(num_configs),
+"\n\n")
+
+
+vi_evaluators <- cvi_evaluators("VI", ground.truth = labels)
+score_fun <- vi_evaluators$score
+pick_fun <- vi_evaluators$pick
+
+comparison <- compare_clusterings(series, types = c("h", "t", "f"), configs = cfgs,
+                                  trace = TRUE, seed = 293L, 
+                                  score.clus = score_fun, pick.clus = pick_fun,
+                                  return.objects = TRUE)
+ #does not work yet... But unnecessary atm
+
+``` 
+
+## dtw-Clustering with model-based preclustering
+```{r hdtw high-res Sr clustering, include=FALSE}
+rm(list = ls())
+#read in data
+load("Data/Otoliths/Adults_element_transects.RData")
+
+Bclust_highres <- Bclust_highres%>%filter(ID!="BH-01908")
+
+#Subset for different age
+Bclust_highres <- Bclust_highres%>%
+  group_by(ID)%>%
+  filter(age>=3 & year<=3)
+
+Fclust_highres_1 <- Fclust_highres%>%
+  group_by(ID)%>%
+  filter(age>=3, year<=3)
+
+yearindex <- "year_3"
+
+#Test mean length of transect (data points)
+summary(count(Bclust_highres, "ID"))
+
+#Interpolate according to rounded mean
+data <- interpol(series = Bclust_highres, length = 200, element = "Sr")
+
+#make into list of matrices -> Bodden
+IDOto <- unique(data$ID)
+
+Bseries_Sr <- list()
+for (i in 1:length(IDOto)) {
+  m <- as.matrix(data[which(data$ID==IDOto[i]),"value"])
+  Bseries_Sr[[length(Bseries_Sr)+1]] <- m
+}
+
+names(Bseries_Sr) <- c(IDOto)
+
+#Freshwater
+summary(count(Fclust_highres_1, "ID"))
+
+#mean is 86.35 --> interpolate to 90
+data <- interpol(series = Fclust_highres_1, length = 200, element = "Sr")
+
+#make into list of matrices
+IDOto <- unique(data$ID)
+
+Fseries_Sr <- list()
+for (i in 1:length(IDOto)) {
+  m <- as.matrix(data[which(data$ID==IDOto[i]),"value"])
+  Fseries_Sr[[length(Fseries_Sr)+1]] <- m
+}
+names(Fseries_Sr) <- c(IDOto)
+
+#cluster that shit -> Bodden
+Bclust_Sr <- tsclust(series = Bseries_Sr, type = "hierarchical",
+                  control = hierarchical_control(method = "ward.D"),
+                  seed = 390,args = tsclust_args(dist = list(window.size =5L)))
+
+plot(Bclust_Sr)
+
+#cluster again with cutoff
+Bclust_Sr_k <- tsclust(series = Bseries_Sr, type = "hierarchical",
+                  k = 3L,centroid = dba,
+                  control = hierarchical_control(method = "ward.D"),
+                  seed = 390,args = tsclust_args(dist = list(window.size =5L)))
+#series plot
+plot(Bclust_Sr_k, type="series")+
+  ylim(0.001, 0.008)+
+  labs(x="transect cell", y="Sr/Ca")+
+  theme(axis.text = element_text(size = 25),
+        axis.title = element_text(size = 25),
+        plot.title = element_text(size = 25))
+#centroid plot
+plot(Bclust_Sr_k, type="centroid", linetype="solid")+
+  ylim(0.001,0.007)+
+  labs(x="transect cell", y="Sr/Ca")+
+  theme(axis.text = element_text(size = 25),
+        axis.title = element_text(size = 25),
+        plot.title = element_text(size = 25))
+
+#assign clusters based on Sr alone
+fishassign_Sr <- data.frame(ID=names(Bseries_Sr), 
+                            clust=factor(Bclust_Sr_k@cluster,levels = c(2,1,3),
+                                            labels = c("IntS", "LowS", "HighS")))
+
+fishassign_Sr <- Bclust_highres_1%>%
+  group_by(ID)%>%
+  transmute(ID=ID,
+            capt=capt,
+            area=area,
+            Sr=mean(Sr),
+            d18O=mean(d18O))%>%
+  distinct()%>%
+  inner_join(fishassign_Sr, by="ID")
+
+plot(Bclust_Sr_k, type="centroid", linetype="solid")+
+  ylim(0.001,0.007)+xlab("transect cell")+ylab("Sr/Ca ratio")+
+  ggtitle("Cluster centroids")+ theme(plot.title = element_text(hjust = 0.5))
+
+#png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Geschwafel/Lab-meeting-11-07-22/Cluster_assign_Sr.jpg", width = 1600, height = 800)
+ggplot(fishassign_Sr, aes(area, fill=clust))+
+  geom_bar(position = "fill")+theme_minimal()+
+  scale_fill_brewer(palette = "Blues")+
+  labs(x="Capture point", y="Proportion", fill="Cluster")+
+  theme(axis.text = element_text(size = 25),
+        axis.title = element_text(size = 25),
+        legend.text = element_text(size = 25),
+        legend.title = element_text(size = 25))
+#dev.off()
+
+#cluster that shit -> Freshwater
+Fclust_Sr <- tsclust(series = Fseries_Sr, type = "hierarchical",
+                  control = hierarchical_control(method = "ward.D"),
+                  seed = 390,args = tsclust_args(dist = list(window.size =5L)))
+plot(Fclust_Sr)
+
+
+#cluster again with cutoff
+Fclust_Sr_k <- tsclust(series = Fseries_Sr, type = "hierarchical",
+                  k = 3L, centroid = dba,
+                  control = hierarchical_control(method = "ward.D"),
+                  seed = 390,args = tsclust_args(dist = list(window.size =5L)))
+
+#series plot
+plot(Fclust_Sr_k, type="series")+
+  ylim(0, 0.004)+
+  labs(x="transect cell", y="Sr/Ca")+
+  theme(axis.text = element_text(size = 25),
+        axis.title = element_text(size = 25),
+        plot.title = element_text(size = 25))
+
+#centroid plot
+plot(Fclust_Sr_k, type="centroid", linetype="solid")+
+  ylim(0,0.004)+
+  labs(x="transect cell", y="Sr/Ca")+
+  theme(axis.text = element_text(size = 25),
+        axis.title = element_text(size = 25),
+        plot.title = element_text(size = 25))
+
+#assign clusters based on Sr alone
+fishassign_FSr <- data.frame(ID=names(Fseries_Sr), 
+                            clust=factor(Fclust_Sr_k@cluster, levels = c(1:3),
+                                            labels = c("LowS", "IntS", "HighS")))
+
+fishassign_FSr <- Fclust_highres%>%
+  group_by(ID)%>%
+  transmute(ID=ID,
+            capt=capt,
+            area=area,
+            Sr=mean(Sr),
+            d18O=mean(d18O))%>%
+  distinct()%>%
+  inner_join(fishassign_FSr, by="ID")
+
+plot(Fclust_Sr_k, type="centroid", linetype="solid")+
+  ylim(0,0.003)+xlab("transect cell")+ylab("Sr/Ca ratio")+
+  ggtitle("Cluster centroids")+ theme(plot.title = element_text(hjust = 0.5))
+
+#png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Geschwafel/Lab-meeting-11-07-22/Cluster_assign_Sr.jpg", width = 1600, height = 800)
+ggplot(fishassign_FSr, aes(capt, fill=clust))+
+  geom_bar(position = "fill")+theme_minimal()+
+  scale_fill_brewer(palette = "Blues")+
+  labs(x="Capture point", y="Proportion", fill="Cluster")+
+  theme(axis.text = element_text(size = 25),
+        axis.title = element_text(size = 25),
+        legend.text = element_text(size = 25),
+        legend.title = element_text(size = 25))
+#dev.off()
+
+save(Bclust_Sr,Bclust_Sr_k,Fclust_Sr,Fclust_Sr_k, fishassign_Sr,fishassign_FSr, file=paste0("Data/Otoliths/", yearindex, "_dtw-clusters_cluster-based.RData"))
+```
+
+```{r hdtw low-res d18O clustering, include=FALSE}
+rm(list = ls())
+#read in data
+load("Data/Otoliths/Adults_element_transects.RData")
+
+Bclust_lowres <- Bclust_lowres%>%filter(ID!="BH-01908")%>%filter(age>=3, year<4)
+
+Bclust_lowres$area <- ifelse(Bclust_lowres$area=="Marine", "GB", Bclust_lowres$area)
+
+length(unique(Bclust_lowres$ID))
+length(unique(Bclust_lowres[Bclust_lowres$area=="GB",]$ID))
+
+summary(count(Bclust_lowres, "ID"))
+
+#mean of 33.77, standard length 40 cells
+
+center_scale <- function(x){
+  scale(x, scale = F)
+}
+
+#reinterpolate to standard length
+data <- interpol(series = Bclust_lowres, length = 35, element = "Sr")
+data2 <- interpol(series = Bclust_lowres, length = 35, element = "d18O_res")
+
+data <- cbind(data, data2[,2])
+
+data[,2] <- scale(data[,2])
+
+colnames(data) <- c("ID", "Sr", "d18O_res")
+
+par(mfrow=c(1,3))
+plot(Bclust_lowres[Bclust_lowres$ID=="BH-90981",]$dist,
+     Bclust_lowres[Bclust_lowres$ID=="BH-90981",]$Sr,
+     xlab="distance um", ylab="d18O", type = "l")
+plot(row_number(data[data$ID=="BH-90981",]$ID),
+     data[data$ID=="BH-90981",]$Sr,
+     xlab="cell", ylab="residuals", type="l")
+
+#make list of matrices
+IDOto <- unique(data$ID)
+
+Bseries_Ores <- list()
+for (i in 1:length(IDOto)) {
+  m <- as.matrix(data[which(data$ID==IDOto[i]),c(2,3)])
+  Bseries_Ores[[length(Bseries_Ores)+1]] <- m
+}
+
+names(Bseries_Ores) <- c(IDOto)
+
+#cluster that shit
+Oclust <- tsclust(series = Bseries_Ores, type = "hierarchical",
+                  control = hierarchical_control(method = "ward.D"),
+                  centroid = dba,
+                  seed = 390,args = tsclust_args(dist = list(window.size =5L)))
+
+plot(Oclust)
+
+ #cluster again with cutoff
+Oclust_k <- tsclust(series = Bseries_Ores, type = "hierarchical",
+                  k = 3L:6L,centroid = dba,
+                  control = hierarchical_control(method = "ward.D"),
+                  seed = 94L,args = tsclust_args(dist = list(window.size =5L)))
+
+names(Oclust_k) <- paste0("k_",3L:6L)
+
+sapply(Oclust_k, cvi, type = "internal")
+
+plot(Oclust_k$k_3, type="series", linetype="solid")+
+  ylim(-3,4)+
+  labs(x="transect cell", y="value")+
+  theme(axis.text = element_text(size = 25),
+        axis.title = element_text(size = 25),
+        plot.title = element_text(size = 25))
+
+png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Chapter 2/Stats/Niche analysis/Figures/Year_3_Sr_d18O_centroids.jpg", width = 2400, height = 800)
+plot(Oclust_k$k_3, type="centroid", linetype="solid", cex=1)+
+  ylim(-2.5,2)+ggtitle(expression("Sr/"~delta^18~O~"cluster centroids"))+
+  labs(x="transect cell", y="scaled value")+
+  theme(axis.text = element_text(size = 25, color="black"),
+        axis.title = element_text(size = 25),
+        plot.title = element_text(size = 25, hjust = 0.5))
+dev.off()
+
+#assign clusters to fish
+fishassign_O <- data.frame(ID=names(Bseries_Ores), 
+                            clust_O=factor(Oclust_k$k_3@cluster, 
+                                           levels = c(1:3), 
+                                           labels = c("High saline|constant temp",
+                                                      "Low saline|shift temp",
+                                                      "Int saline|cold temp")))
+
+fishassign_O <- Bclust_lowres%>%
+  group_by(ID)%>%
+  transmute(ID=ID,
+            capt=capt,
+            area=area)%>%
+  distinct()%>%
+  inner_join(fishassign_O, by="ID")%>%
+  mutate(clust_O=fct_relevel(clust_O, "Low saline|shift temp",
+                             "Int saline|cold temp","High saline|constant temp"))
+
+mypallette <- viridis::viridis(3, direction = -1)
+
+png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Chapter 2/Stats/Niche analysis/Figures/Clusterassign_WRB.jpg", width = 1200, height = 800)
+ggplot(fishassign_O[fishassign_O$area=="WRB",], aes(area, fill=clust_O))+
+  geom_bar(position = "fill", width = .5)+theme_minimal()+
+  labs(x="", y="proportion", fill="assigned cluster")+
+  scale_fill_manual(breaks=c("Low saline|shift temp","Int saline|cold temp",
+                             "High saline|constant temp"), values = mypallette)+
+  theme(axis.text.y = element_text(size = 25),
+        axis.text.x = element_blank(),
+        axis.title = element_text(size = 25),
+        legend.text = element_text(size = 25),
+        legend.title = element_text(size = 25),
+        legend.position = "top")
+dev.off()
+
+write.table(fishassign_O, file = "Data/otoliths/Year_3_clusters.txt", row.names = F,
+            dec = ".", sep = "\t")
+
+ggarrange(WRB,NRB,GB,FW, nrow = 1, labels = c("WRB","NRB","GB","FW"), legend.grob = get_legend(NRB))
+
+fishtest <- fishassign_O%>%
+  transmute(ID=ID,
+            clust_O1=clust_O)%>%
+  inner_join(fishassign_O2, by="ID")%>%
+  transmute(ID=ID,
+            clust_O1=clust_O1,
+            clust_O2=clust_O)
+```
+
+```{r mean d18O of clusters}
+rm(list = ls())
+
+#All fish
+
+oto_lowres <- read.delim("Data/Otoliths/Oto_LA-to-d18O_interpolation.txt",
+                         header = T, dec = ".", sep = "\t",
+                         stringsAsFactors = F)
+
+
+oto_lowres$year <- as.factor(oto_lowres$year)
+oto_lowres$area <- ifelse(oto_lowres$area=="WRB", "Marine",
+                          ifelse(oto_lowres$area=="NRB", "Marine",oto_lowres$area))
+
+#read in clusters
+fishassign_O <- read.delim("Data/Otoliths/all-clusters_model-based.txt",
+                           header = T, stringsAsFactors = F, 
+                           sep = "\t", dec = ".")
+fishassign_O$clust_O <- factor(fishassign_O$clust_O, levels = c(1,2,3), 
+                               labels = c("constant", "niche shift", "cold"))
+
+#read in yearly d18O
+d18O_years <- read.delim("Data/pike_data_d18O_years.txt", header = T,
+                         stringsAsFactors = F, sep = "\t", dec = ".")
+
+pikedat <- fishassign_O%>%
+  transmute(ID=ID,
+            clust_m=clust_m,
+            clust_dtw=clust_dtw,
+            clust_O=clust_O)%>%
+  inner_join(oto_lowres, by = "ID")%>%
+  group_by(ID, year)%>%
+  summarise(ID=ID,
+            capt=capt,
+            area=area,
+            d18O=mean(d18O),
+            d18O_res=mean(res),
+            Sr=mean(Sr),
+            Na=mean(Na),
+            Mg=mean(Mg),
+            Ba=mean(Ba),
+            Mn=mean(Mn),
+            year=year,
+            clust_m=as.factor(clust_m),
+            clust_dtw=clust_dtw,
+            clust_O=clust_O)
+
+mypallette <- viridis::viridis(6)
+
+png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Chapter 2/Stats/Niche analysis/Figures/Lifelong_d18O_res.jpg", width = 1200, height = 800)
+ggplot(oto_lowres, aes(year, res))+
+  geom_boxplot(aes(fill = area), width = 0.5)+
+  scale_x_discrete(limits = as.character(c(1:10)))+
+  scale_fill_manual(breaks = c("Marine", "Freshwater"), values = mypallette[c(2,5)])+
+  theme(legend.position = "bottom")+
+  theme_minimal()+
+  labs(x="Age (years)", y=expression(delta^18~O~"residuals"), 
+       title = expression("Lifelong"~delta^18~O~"(corrected with Sr)"))+
+  theme(axis.text.y = element_text(size = 25, color = "black"),
+        axis.text.x = element_text(size = 25, color = "black"),
+        axis.title = element_text(size = 25),
+        legend.text = element_text(size = 25),
+        legend.title = element_text(size = 25),
+        plot.title = element_text(size = 25, hjust = 0.5))
+dev.off()
+
+png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Chapter 2/Stats/Niche analysis/Figures/Lifelong_Sr.jpg", width = 1200, height = 800)
+ggplot(oto_lowres, aes(year, Sr))+
+  geom_boxplot(aes(fill = area), width = 0.5)+
+  scale_x_discrete(limits = as.character(c(1:10)))+
+  scale_fill_manual(breaks = c("Marine", "Freshwater"), values = mypallette[c(2,5)])+
+  theme(legend.position = "bottom")+
+  theme_minimal()+
+  labs(x="Age (years)", y="Sr/Ca (g/g)", 
+       title = "Lifelong Sr/Ca")+
+  theme(axis.text.y = element_text(size = 25, color = "black"),
+        axis.text.x = element_text(size = 25, color = "black"),
+        axis.title = element_text(size = 25),
+        legend.text = element_text(size = 25),
+        legend.title = element_text(size = 25),
+        plot.title = element_text(size = 25, hjust = 0.5))
+dev.off()
+```
+
+## Growth
+```{r get clean version of growth data, include=FALSE}
+
+rm(list = ls())
+
+#get clustering results
+load("Data/Otoliths/dtw-clusters_cluster-based.RData")
+
+#read in pike data
+fishdata <- read.delim("Data/Scales_Oto_data.txt", sep = "\t", dec = ".", 
+                       header = T, stringsAsFactors = F)
+names(fishdata) <- tolower(names(fishdata))
+
+#load in age readings
+pike_increments_B <- read.delim("Data/Otoliths/Otolith_combo_round2.txt", 
+                              header = T, stringsAsFactors = F)
+names(pike_increments_B) <- tolower(names(pike_increments_B))
+
+pike_increments_Ana <- read.delim("Data/Otoliths/combined_anadromous.txt",
+                                  header = T, stringsAsFactors = F)
+names(pike_increments_Ana) <- tolower(names(pike_increments_Ana))
+
+#read in decoder
+decoder_B <- read.delim("Data/Otoliths/Decoding_file_05-10-21_BH-00670-90307_Otoliths.txt", header = T, stringsAsFactors = F)
+
+names(decoder_B) <- tolower(names(decoder_B))
+
+decoder_Ana <- read.delim("Data/Otoliths/Decoding_file_12-10-21_BH-00670-90307_Otoliths.txt", header = T, stringsAsFactors = F)
+
+names(decoder_Ana) <- tolower(names(decoder_Ana))
+
+pike_increments_B$random_id <- pike_increments_B$sample
+pike_increments_Ana$random_id <- pike_increments_Ana$sample
+
+#decode
+pike_increments_B <- pike_increments_B %>% inner_join(decoder_B, by = "random_id")
+pike_increments_Ana <- pike_increments_Ana%>%inner_join(decoder_Ana, by="random_id")
+
+pike_increments <- rbind(pike_increments_Ana, pike_increments_B)
+
+pike_inc <- pike_increments %>% inner_join(fishdata, by="id")%>%
+  transmute(ID=id,
+            age=age,
+            cohort=cohort,
+            capt=area,
+            TL=tl,
+            weigth=weight,
+            sex=sex,
+            date=parse_date_time(date, "dmy"),
+            core=core,
+            i=i,
+            year=year,
+            increment=increment,
+            quality=quality)
+
+#convert inc to rad
+IDpike <- unique(pike_inc$ID)
+rad <- NULL
+for (i in 1:length(IDpike)) {
+  d <- cumsum(coalesce(pike_inc[which(pike_inc$ID == IDpike[i]), "increment"], 0)) + pike_inc[which(pike_inc$ID == IDpike[i]), "increment"]*0
+ rad <- c(rad, d)
+}
+
+pike_inc$rad <- rad
+
+write.table(pike_inc, file = "Data/Otoliths/Oto_increment_data_with_rad",
+            sep = "\t", dec = ".", row.names = F)
+```
+
+```{r Bodden growth, echo=FALSE, warning=FALSE, message=FALSE, dpi=600}
+
+rm(list = ls())
+
+#read in data on increment widths
+pike_inc <- read.delim(file = "Data/Otoliths/Oto_increment_data_with_rad",
+            sep = "\t", dec = ".", header = T, stringsAsFactors = F)
+
+#get clusters
+#load("Data/Otoliths/dtw-clusters_cluster-based.RData")
+
+
+year3 <- read.delim("Data/otoliths/Year_3_clusters.txt", header = T, sep = "\t",
+                    dec = ".", stringsAsFactors = F)
+
+#join increment data with clustering results
+pikedat_B <- year3%>%
+  transmute(ID=ID,
+            capt=capt,
+            area=area,
+            clust=clust_O)%>%
+  inner_join(pike_inc, by = "ID")
+
+pikedat_B$i <- as.factor(as.numeric(pikedat_B$i))
+
+mypallette <- viridis::viridis(3, direction = -1)
+
+png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Chapter 2/Stats/Niche analysis/Figures/Growth_cluster_year3.jpg", width = 1200, height = 800)
+ggplot(pikedat_B[pikedat_B$i!="edge"&pikedat_B$i!="core",], 
+       aes(i,increment, fill=clust))+
+  scale_x_discrete(limits = c(as.character(c(1:3))),
+                   breaks = c(as.character(c(1:3))))+
+  labs(x="Age (years)", y="otolith increment (\U00B5m)", title = "Cluster-dependent growth",
+       fill="Cluster")+
+  scale_fill_manual(breaks = c("Low saline|shift temp","Int saline|cold temp",
+                             "High saline|constant temp"), values = mypallette)+
+  geom_violin()+theme_minimal()+
+  theme(axis.text.y = element_text(size = 25, color = "black"),
+        axis.text.x = element_text(size = 25, color = "black"),
+        axis.title = element_text(size = 25),
+        legend.text = element_text(size = 25),
+        legend.title = element_text(size = 25),
+        plot.title = element_text(size = 25))
+dev.off()
+
+ggplot(pikedat_B[pikedat_B$i!="edge"&pikedat_B$i!="core",], aes(clust,TL, color=clust))+
+  geom_boxplot()+theme_minimal()
+
+ggplot(pikedat_B[pikedat_B$i!="edge"&pikedat_B$i!="core",], aes(clust,age, color=clust))+
+  geom_boxplot()+theme_minimal()
+
+write.table(pikedat_B, "Data/Otoliths/Growthdata_Bodden-cluster.txt", row.names = F,
+            sep = "\t", dec = ".")
+```
+
+```{r Freshwater growth, echo=FALSE, warning=FALSE, message=FALSE, dpi=600}
+
+rm(list = ls())
+
+#read in data of increments
+pike_inc <- read.delim(file = "Data/Otoliths/Oto_increment_data_with_rad",
+            sep = "\t", dec = ".", header = T, stringsAsFactors = F)
+
+#get clusters
+load("Data/Otoliths/dtw-clusters_cluster-based.RData")
+
+pikedat_F <- fishassign_FSr%>%
+  transmute(ID=ID,
+            area=area,
+            clust=clust)%>%
+  inner_join(pike_inc, by = "ID")
+
+pikedat_F$i <- as.factor(as.numeric(pikedat_F$i))
+
+ggplot(pikedat_F[pikedat_F$i!="edge"&pikedat_F$i!="core",], aes(i,rad, color=clust))+
+  scale_x_discrete(limits = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"),
+                   breaks = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"))+
+  labs(x="Age (years)", y="otolith radius")+
+  geom_boxplot()+theme_minimal()
+
+ggplot(pikedat_F[pikedat_F$i!="edge"&pikedat_F$i!="core",], 
+       aes(clust,TL, color=clust))+
+  labs(x="Cluster", y="TL (mm)")+
+  geom_boxplot()+theme_minimal()
+
+ggplot(pikedat_F[pikedat_F$i!="edge"&pikedat_F$i!="core",], 
+       aes(clust,age, color=clust))+
+  labs(x="Cluster", y="Age (years)")+
+  geom_boxplot()+theme_minimal()
+
+write.table(pikedat_F, "Data/Otoliths/Growthdata_Freshwater-cluster.txt", row.names = F,
+            sep = "\t", dec = ".")
+```
+
+```{r mixed modelling growth, include=FALSE, eval=FALSE}
+
+rm(list = ls())
+
+pikedat_B <- read.delim("Data/Otoliths/Growthdata_Bodden-cluster.txt", 
+                        sep = "\t", dec = ".", header = T, stringsAsFactors = F)
+
+pikedat_F <- read.delim("Data/Otoliths/Growthdata_Freshwater-cluster.txt", 
+                        sep = "\t", dec = ".", header = T, stringsAsFactors = F)
+
+#Prep MLE
+pikedata <- pikedat_B%>%
+  transmute(ID=as.character(ID),
+            area=as.factor(area),
+            clust=factor(clust, levels = c(1:3), 
+                         labels = c("LowS","Med","HighS")),
+            age=as.integer(age),
+            cohort=as.integer(cohort),
+            TL=as.numeric(TL),
+            sex=as.factor(sex),
+            year=factor(i, levels = c(1:13), labels = c(1:13)),
+            rad=as.numeric(rad))%>%
+  drop_na()
+
+#0 model
+pikedat$rad <- scale(pikedat$rad)
+
+m0 <- lmer(rad~age+year+area+clust+sex+(1|cohort)+(1|ID), data = pikedat, 
+           na.action = na.omit)
+
+#without sex
+m1 <- lmer(rad~age+year+area+clust+(1|cohort)+(1|ID), data = pikedat, 
+           na.action = na.omit)
+
+anova(m0, m1)
+
+#without age
+m2 <- lmer(rad~year+area+clust+(1|cohort)+(1|ID), data = pikedat, 
+           na.action = na.omit)
+
+anova(m0, m2)
+#age needs to stay
+
+#without clust
+m3 <- lmer(rad~age+year+area+(1|cohort)+(1|ID), data = pikedat, 
+           na.action = na.omit)
+
+anova(m0, m3)
+
+emmeans(m0)
+#clust can go
+
+#Without cohort
+m4 <- lmer(rad~age+area+(1|ID), data = pikedat, 
+           na.action = na.omit)
+
+anova(m0, m4)
+
+#without area
+m4 <- lmer(rad~age+(1|ID), data = pikedat, 
+           na.action = na.omit)
+
+anova(m0, m4)
+```
+
+# Clustering with clean d18O data
+
+
+# Growth
+```{r get clean version of growth data, include=FALSE}
+
+rm(list = ls())
+
+#get clustering results
+fishassign_O <- read.delim("Data/Otoliths/all-clusters_model-based.txt",
+                           header = T, stringsAsFactors = F, 
+                           sep = "\t", dec = ".")
+
+#read in pike data
+fishdata <- read.delim("Data/Scales_Oto_data.txt", sep = "\t", dec = ".", 
+                       header = T, stringsAsFactors = F)
+names(fishdata) <- tolower(names(fishdata))
+
+#load in age readings
+pike_increments_B <- read.delim("Data/Otoliths/Otolith_combo_round2.txt", 
+                              header = T, stringsAsFactors = F)
+names(pike_increments_B) <- tolower(names(pike_increments_B))
+
+pike_increments_Ana <- read.delim("Data/Otoliths/combined_anadromous.txt",
+                                  header = T, stringsAsFactors = F)
+names(pike_increments_Ana) <- tolower(names(pike_increments_Ana))
+
+#read in decoder
+decoder_B <- read.delim("Data/Otoliths/Decoding_file_05-10-21_BH-00670-90307_Otoliths.txt", header = T, stringsAsFactors = F)
+
+names(decoder_B) <- tolower(names(decoder_B))
+
+decoder_Ana <- read.delim("Data/Otoliths/Decoding_file_12-10-21_BH-00670-90307_Otoliths.txt", header = T, stringsAsFactors = F)
+
+names(decoder_Ana) <- tolower(names(decoder_Ana))
+
+pike_increments_B$random_id <- pike_increments_B$sample
+pike_increments_Ana$random_id <- pike_increments_Ana$sample
+
+#decode
+pike_increments_B <- pike_increments_B %>% inner_join(decoder_B, by = "random_id")
+pike_increments_Ana <- pike_increments_Ana%>%inner_join(decoder_Ana, by="random_id")
+
+pike_increments <- rbind(pike_increments_Ana, pike_increments_B)
+
+pike_inc <- pike_increments %>% inner_join(fishdata, by="id")%>%
+  transmute(ID=id,
+            age=age,
+            cohort=cohort,
+            capt=area,
+            TL=tl,
+            weigth=weight,
+            sex=sex,
+            date=parse_date_time(date, "dmy"),
+            core=core,
+            i=i,
+            year=year,
+            increment=increment,
+            quality=quality)
+
+#convert inc to rad
+IDpike <- unique(pike_inc$ID)
+rad <- NULL
+for (i in 1:length(IDpike)) {
+  d <- cumsum(coalesce(pike_inc[which(pike_inc$ID == IDpike[i]), "increment"], 0)) + pike_inc[which(pike_inc$ID == IDpike[i]), "increment"]*0
+ rad <- c(rad, d)
+}
+
+pike_inc$rad <- rad
+# plot(Bclust_all_k, type="series")
+# plot(Bclust_Sr_k, type="series")
+# ggplot(fishassign_all, aes(area, fill=clust))+geom_bar()+theme_minimal()
+# ggplot(fishassign_Sr, aes(area, fill=clust))+geom_bar()+theme_minimal()
+# ggplot(fishassign_Fall, aes(capt, fill=clust))+geom_bar()+theme_minimal()
+# ggplot(fishassign_FSr, aes(capt, fill=clust))+geom_bar()+theme_minimal()
+```
+```{r increment growth, echo=FALSE, warning=FALSE, message=FALSE, dpi=600}
+#join increment data with clustering results
+pikedat_B <- fishassign_O%>%
+  transmute(ID=ID,
+            area=area,
+            clust_m=clust_m,
+            clust_dtw=clust_dtw,
+            clust_O=clust_O)%>%
+  inner_join(pike_inc, by = "ID")
+
+pikedat_B$i <- as.factor(as.numeric(pikedat_B$i))
+
+png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Geschwafel/Lab-meeting-11-07-22/Ogrowth.jpg", width = 1600, height = 800)
+ggplot(pikedat_B[pikedat_B$i!="edge"&pikedat_B$i!="core",], aes(i,increment, color=clust_O))+
+  scale_x_discrete(limits = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"),
+                   breaks = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"))+
+  labs(x="age (years)", y="otolith increment (um)")+
+  geom_boxplot()+theme_minimal()+
+  theme(axis.text = element_text(size = 25),
+        axis.title = element_text(size = 25),
+        legend.text = element_text(size = 25),
+        legend.title = element_text(size = 25))
+dev.off()
+
+png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Geschwafel/Lab-meeting-11-07-22/Salgrowth.jpg", width = 1600, height = 800)
+ggplot(pikedat_B[pikedat_B$i!="edge"&pikedat_B$i!="core",], aes(i,increment, color=clust_dtw))+
+  scale_x_discrete(limits = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"),
+                   breaks = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"))+
+  labs(x="Age (years)", y="otolith increment (um)")+
+  geom_boxplot()+theme_minimal()+
+  theme(axis.text = element_text(size = 25),
+        axis.title = element_text(size = 25),
+        legend.text = element_text(size = 25),
+        legend.title = element_text(size = 25))
+dev.off()
+  
+
+ggplot(pikedat_B[pikedat_B$i!="edge"&pikedat_B$i!="core",], aes(i,increment, color=clust_dtw))+
+  geom_boxplot()+theme_minimal()
+
+ggplot(pikedat_B[pikedat_B$i!="edge"&pikedat_B$i!="core",], aes(clust_O,rad))+
+  geom_boxplot()+theme_minimal()
+```
+
+```{r growth modeling}
+center_scale <- function(x){
+  scale(x, scale = F)
+}
+
+pikedat_B$sex <- ifelse(pikedat_B$sex=="f", 1, 0)
+
+Pikedata <- pikedat_B%>%
+  transmute(ID=ID,
+            capt=as.factor(capt.y),
+            area=factor(area),
+            age=age,
+            cohort=cohort,
+            TL=TL,
+            sex=factor(sex, levels = c(0,1), labels = c("m", "f")),
+            i=i,
+            year=year,
+            inc=increment,
+            inclast=rad-inc,
+            rad=rad,
+            #clust_dtw=factor(clust_dtw),
+            clust=factor(clust))%>%
+  drop_na()
+
+m0 <- lmer(rad~age+sex+clust+(1|ID), data = Pikedata)
+
+summary(m0)
+#remove clust
+m1 <- lmer(rad~age+sex+(1|ID), data = Pikedata)
+
+anova(m0,m1)
+
+#remove area
+m2 <- lmer(rad~age+sex+inclast+clust_dtw+clust_O+(1|ID)+(1|year)+(1|cohort), 
+           data = Pikedata)
+anova(m0,m2)
+#area can go
+#remove year
+m3 <- lmer(rad~age+sex+inclast+clust_dtw+clust_O+(1|ID)+(1|cohort), 
+           data = Pikedata)
+anova(m2,m3)
+#year needs to stay
+#remove ID
+m4 <- lmer(rad~age+sex+inclast+clust_dtw+clust_O+(1|year)+(1|cohort), 
+           data = Pikedata)
+anova(m2,m4)
+#ID needs to stay
+m0 <- lmer(rad~age+sex+inclast+clust_dtw+clust_O+(1|ID)+(1|year)+(1|cohort), 
+           data = Pikedata)
+#remove age
+m1.1 <- lmer(rad~sex+inclast+clust_dtw+clust_O+(1|ID)+(1|year)+(1|cohort), 
+           data = Pikedata)
+anova(m0, m1.1)
+#age stays
+#remove sex
+m2.1 <- lmer(rad~age+inclast+clust_dtw+clust_O+(1|ID)+(1|year)+(1|cohort), 
+           data = Pikedata)
+anova(m0,m2.1)
+#sex stays
+#remove inclast
+m3.1 <- lmer(rad~age+sex+clust_dtw+clust_O+(1|ID)+(1|year)+(1|cohort), 
+           data = Pikedata)
+anova(m0,m3.1)
+#inclast stays
+#remove clust_dtw
+m4.1 <- lmer(rad~age+sex+inclast+clust_O+(1|ID)+(1|year)+(1|cohort), 
+           data = Pikedata)
+anova(m0, m4.1)
+#clust_dtw can go
+#remove clust_O
+m5 <- lmer(rad~age+sex+inclast+clust_dtw+(1|ID)+(1|year)+(1|cohort), 
+           data = Pikedata)
+anova(m0, m5)
+
+emmeans(m0, specs = pairwise ~ clust)
+```
+
+
+# Modelling salinity from Sr/Ca
+
+```{r get last 50 um of Sr/Ca, include=FALSE, eval=FALSE}
+#Read in LA-ICPMS and SIMS data
+rm(list = ls())
+
+LA <- read.delim("Data/pike_data_LA-ICPMS_years_without_core.txt", 
+                 header = T, stringsAsFactors = F, sep = "\t", dec = ".")
+
+#load in LUNGdata
+LUNGdata <- read.delim(file = "Data/LUNGdata_complete.txt", sep = "\t", header = T, stringsAsFactors = F)
+
+#load BH-data
+Samplingdata <- read.delim(file = "Data/Samp_Inst_months.txt", sep = "\t", header = T, stringsAsFactors = F)
+
+#load Logger data
+Loggerdata <- read.delim(file = "Data/Logger_month_means.txt", sep = "\t", header = T, stringsAsFactors = F)
+
+load("Data/Olga salinity interpolation/Data/IPDW_results.RData")
+
+#Bring all into same format, LUNG data
+LUNGdata <- LUNGdata%>%
+  transmute(name = name,
+            id = id,
+            waterbody = waterbody,
+            month = month,
+            year = year,
+            identifier = paste0(month, "_", year),
+            Lat = Lat,
+            Long = Long,
+            type = type,
+            SAL = SAL)
+
+#BH sampling
+Samplingdata <- Samplingdata%>%
+  transmute(name = name,
+            id = id,
+            waterbody = waterbody,
+            month = month,
+            year = year,
+            identifier = paste0(month, "_", year),
+            Lat = Lat,
+            Long = Long,
+            type = type,
+            SAL = SAL)
+
+#Logger
+Loggerdata <- Loggerdata%>%
+  transmute(name = name,
+            id = id,
+            waterbody = waterbody,
+            month = month,
+            year = year,
+            identifier = identifier,
+            Lat = Lat,
+            Long = Long,
+            type = type,
+            SAL = SAL)
+
+#Join & filter out freshwater
+Saldata <- rbind(LUNGdata, Samplingdata, Loggerdata)
+Saldata <- Saldata%>%
+  filter(type != "Freshwater")%>%
+  filter(year == 2020|year == 2021|year==2019)
+
+
+LA <- LA%>%
+  transmute(ID = ID,
+            capt = area,
+            area = case_when(area %in% "Peene" ~ "Freshwater",
+                             area %in% "Barthe" ~ "Freshwater",
+                             area %in% "NHG" ~ "Freshwater",
+                             area %in% "Sehrowbach" ~ "Freshwater",
+                             area %in% "Bandycksgraben" ~ "Freshwater",
+                             area %in% "Ziese" ~ "Freshwater",
+                             area %in% "KB" ~ "WRB",
+                             area %in% "SB" ~ "WRB",
+                             area %in% "WB" ~ "NRB",
+                             area %in% "BEG" ~ "NRB", 
+                             area %in% "KJB" ~ "NRB",
+                             area %in% "GJB" ~ "NRB",
+                             area %in% "GB" ~ "GB",
+                             area %in% "KD" ~ "control",
+                             TRUE ~ "NA"),
+            Sr = Sr,
+            Na = Na,
+            Mg = Mg,
+            Ba = Ba,
+            Mn = Mn,
+            LA_dist = LA_dist)
+
+fishdata <- read.delim("Data/Scales_Oto_data.txt", sep = "\t", dec = ".", 
+                       header = T, stringsAsFactors = F)
+
+
+Srlast <- LA%>%
+  group_by(ID)%>%
+  dplyr::select(c(ID,capt,area,Sr,LA_dist))%>%
+  summarise(ID=ID,
+            capt=capt,
+            area=area,
+            Sr=ifelse(LA_dist>=(max(LA_dist)-50),Sr,NA),
+            LA_dist=LA_dist)%>%
+  drop_na()%>%
+  summarise(Sr_sd=sd(Sr),
+            Sr=mean(Sr))%>%
+  inner_join(fishdata[,c(1,3:12)], by="ID")
+
+Srlast <- Srlast%>%
+  mutate(date=case_when(lubridate::day(parse_date_time(date,orders="dmy"))>=15~                          lubridate::date(parse_date_time(date,orders="dmy"))+months(1),
+           TRUE~lubridate::date(parse_date_time(date, orders = "dmy"))))%>%
+  transmute(ID=ID,
+            sex=sex,
+            weight=Weight,
+            TL=TL,
+            area=area,
+            Lat=Lat,
+            Long=Long,
+            date=date)
+
+day(Srlast$date) <- 1
+
+#Get fish coordinates
+Fish_coord <- Srlast%>%
+  transmute(ID=ID, 
+            area=area, 
+            year=lubridate::year(parse_date_time(date,orders="ymd")),
+            month=lubridate::month(parse_date_time(date,orders="ymd")),
+            Lat=Lat, 
+            Long=Long)%>%
+  drop_na()
+
+Fish_coord$Long <- as.numeric(Fish_coord$Long)
+Fish_coord$Lat <- as.numeric(Fish_coord$Lat)
+fish_xy <- Fish_coord[,6:5]
+fish_sp <- SpatialPointsDataFrame(coords = fish_xy, data = Fish_coord, 
+                                        proj4string = CRS("+init=epsg:4326"))
+fish_sp <- spTransform(fish_sp, CRS("+proj=utm +zone=33 +ellps=GRS80 
+                                  +units=m +no_defs"))
+
+plot(yras$X2020.Month.5)
+points(fish_sp)
+
+df <- raster::extract(yras, fish_sp, buffer = 1000, small = T, fun = mean, na.rm = T)
+
+fish_sp <- cbind(fish_sp, df)
+
+fish_sal <- data.frame(fish_sp)
+
+fish_sal %>%
+  pivot_longer(cols = starts_with("x"))
+
+fish_sal <- fish_sal%>%
+  dplyr::select(ends_with("7"))
+
+
+
+```
+
+```{r functions for plotting automated transects, include=FALSE, eval=FALSE }
+
+Tplot <- function(x){
+  par(mfrow=c(1,2))
+  plot(Oto_highres[Oto_highres$ID==x,]$LA_dist, 
+       Oto_highres[Oto_highres$ID==x,]$Sr, type = "l",
+       xlab="Distance_um", ylab="Sr/Ca",
+       ylim=c(min(Oto_highres$Sr),max(Oto_highres$Sr)),
+       xlim=c(min(Oto_highres$LA_dist),max(Oto_highres$LA_dist)))
+  abline(lm(Oto_highres[Oto_highres$ID==x,]$Sr~
+              Oto_highres[Oto_highres$ID==x,]$LA_dist), col="red")
+  plot(Oto_highres[Oto_highres$ID==x,]$LA_dist, 
+       Oto_highres[Oto_highres$ID==x,]$d18O, type = "l",
+       xlab="Distance_um", ylab="d18O")
+  abline(lm(Oto_highres[Oto_highres$ID==x,]$d18O~
+              Oto_highres[Oto_highres$ID==x,]$LA_dist), col="blue")
+}
+
+JTplot <- function(x){
+  par(mfrow=c(1,2))
+  plot(Otoj_highres[Otoj_highres$ID==x,]$dist, 
+       Otoj_highres[Otoj_highres$ID==x,]$Sr, type = "l",
+       xlab="Distance_um", ylab="Sr/Ca")
+  abline(lm(Otoj_highres[Otoj_highres$ID==x,]$Sr~
+              Otoj_highres[Otoj_highres$ID==x,]$dist), col="red")
+  plot(Otoj_highres[Otoj_highres$ID==x,]$dist, 
+       Otoj_highres[Otoj_highres$ID==x,]$d18O, type = "l",
+       xlab="Distance_um", ylab="d18O")
+  abline(lm(Otoj_highres[Otoj_highres$ID==x,]$d18O~
+              Otoj_highres[Otoj_highres$ID==x,]$dist), col="blue")
+}
+
+Oto_highres <- read.delim("Data/Otoliths/Oto_d18O-to-LA_interpolation.txt",
+                          header = T, stringsAsFactors = F, sep = "\t", dec = ".")
+Otoj_highres <- read.delim("Data/Otoliths/Oto_juveniles_d18O-to-LA.txt",
+                          header = T, stringsAsFactors = F, sep = "\t", dec = ".")
+
+Tplot("BH-01893")
+JTplot("BH-01922")
+```
+
+
+ 

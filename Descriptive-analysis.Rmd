@@ -1,0 +1,1564 @@
+---
+title: "Descriptive-analysis"
+author: "TR"
+date: "3 3 2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(sp)
+library(rgdal)
+library(purrr)
+library(compensateR)
+library(lubridate)
+library(measurements)
+library(ipdw)
+library(geoR)
+library(spatstat)
+library(gdata)
+library(rgeos)
+library(sf)
+library(rspatial)
+library(dismo)
+library(gstat)
+library(vegan)
+library(indicspecies)
+library(factoextra)
+library(ggplot2)
+library(ggpubr)
+library(ggpmisc)
+library(cluster)
+library(knitr)
+```
+
+```{r divide SIMS-data into years, include=FALSE, echo=FALSE, eval=FALSE}
+
+rm(list = ls())
+
+#load SIMS data
+sims <- read.delim("Data/Otoliths/Otolith_data_clean_core_with_distance_um.txt", 
+                  header = T, stringsAsFactors = F, sep = "\t", dec = ".")
+length(unique(sims$ID))
+
+sims <- sims%>%
+  group_by(ID)%>%
+  transmute(fishID = ID2[[3]],
+            d18O = d18O,
+            distance = Distance_um)
+
+#remove Pilot fish (for now)
+sims <- sims[grepl("F1", sims$ID)==F,]
+sims <- sims[grepl("#", sims$ID)==F,]
+sims <- sims[grepl("34", sims$ID)==F,]
+
+#load annuli data
+#add BH-1567 and BH-01580 (no scales)
+annuli <- read.delim("Data/Otoliths/Otolith_annuli.txt", header = T, stringsAsFactors = F)
+
+#load pike data
+fishdata <- read.delim("Data/Otoliths/Scales_Oto_data.txt", header = T, 
+                       stringsAsFactors = F)
+names(fishdata) <- tolower(names(fishdata))
+fishdata <- fishdata%>%
+  transmute(fishID = id,
+            cdate = date,
+            TL_mm = tl,
+            weight = weight,
+            sex = sex,
+            area = area)
+
+#Extract BH-numbers from sample names (ObjectJ)
+substrRight <- function(x, n){
+  substr(x, nchar(x)-n+1, nchar(x))
+}
+
+#annu <- annuli%>%
+#  group_by(Sample)%>%
+#  mutate(inc = case_when(I %in% "core"~"0",
+#                          I %in% "edge"~as.character(length(unique(I))-1),
+#                          TRUE~I))%>%
+#  ungroup()%>%
+#  transmute(fishID = substrRight(Sample, 8),
+#            simsID = gsub("-", "",substr(Sample,1,2)),
+#            quality = Quality,
+#            age = Age,
+#            cohort = Cohort,
+#            core = Core,
+#            inc = inc,
+#            year = Year,
+#            increment_um = case_when(inc %in% "0"~0,
+#                                     TRUE ~ as.numeric(Increment)))
+
+#annu <- data.frame(annu)
+#IDpike <- unique(annu$fishID)
+#rad <- NULL
+#for (i in 1:length(IDpike)) {
+#  d <- cumsum(coalesce(annu[which(annu$fishID == IDpike[i]), "increment_um"], 0)) + annu[which(annu$fishID == IDpike[i]), "increment_um"]*0
+#  rad <- c(rad, d)
+#}
+
+#annu$rad <- rad
+
+#annu$inc <- as.numeric(annu$inc)
+
+annu <- read.delim("Data/Otoliths/annuli_with_rad.txt", sep = "\t", dec = ".", header = T,
+                   stringsAsFactors = F)
+
+#correct annu placement
+ID <-"BH-01713"
+x <- 7
+y <- 30
+
+#annu[annu$fishID == ID & annu$year == x,]$rad_um <-
+#  annu[annu$fishID == ID & annu$year == x,]$rad_um+y
+#annu[annu$fishID == ID & annu$year == x,]$increment_um <- 
+#  annu[annu$fishID == ID & annu$year == x,]$increment_um+y
+
+
+#remove year
+#annu <- rbind(annu[annu$fishID!="BH-90981",], annu[annu$fishID == "BH-90981"&annu$year != 7,])
+#annu[annu$fishID == "BH-00391"&annu$year == 9,]$rad_um <- 1806.8
+#annu[annu$fishID == "BH-00391"&annu$year == 9,]$increment_um <- 112.7+6.2
+
+#inverse order for sims distances
+sims <- sims %>% group_by(ID)%>%arrange(distance, by_group = F)%>%ungroup()%>%
+  arrange(ID)
+
+IDpike <- unique(sims$ID)
+radID <- unique(annu$year)
+y <- NULL
+yy <- NULL
+
+for (i in 1:length(IDpike)) {
+  for (j in 0:length(annu[which(annu$simsID==IDpike[i]), "year"])) {
+y <- ifelse(sims[which(sims$ID==IDpike[i]), "distance"]<=
+                      annu[which(annu$simsID==IDpike[i]&annu$year==radID[j]), "rad_um"]&
+              sims[which(sims$ID==IDpike[i]), "distance"]
+              >=annu[which(annu$simsID==IDpike[i]&annu$year==radID[j-1]), "rad_um"],
+                    annu[which(annu$simsID==IDpike[i]&annu$year==radID[j]), "year"],
+            ifelse(sims[which(sims$ID==IDpike[i]), "distance"]>
+              max(annu[which(annu$simsID==IDpike[i]), "rad_um"])&
+                radID[j]==max(annu[which(annu$simsID==IDpike[i]), "year"]), 
+            max(annu[which(annu$simsID==IDpike[i]), "year"]),NA))
+yy <- c(yy, na.omit(y))
+  }
+}
+
+##revert the order of distances in "sims", so the yy vector can be pasted correctly
+
+str_sort(unique(sims$ID))
+str_sort(unique(annu$simsID))
+
+sims$year <- yy
+
+ggplot(sims, aes(year, d18O))+stat_summary(fun = mean)+
+  scale_x_continuous(breaks = seq(1,13,1), labels = seq(1,13,1))+
+  theme_minimal()
+  
+
+length(sims[sims$fishID=="BH-91050",]$distance)
+annu[annu$fishID=="BH-91328",]$year
+
+#prepare join
+#annu <- annu%>%
+#  transmute(simsID = simsID,
+#            fishID = fishID,
+#            quality = quality,
+#            age = age,
+#            cohort = cohort,
+#            core = core,
+#            year = inc,
+#            yearclass = year,
+#            increment_um = increment_um,
+#            rad_um = rad)
+
+sims <- sims%>%
+  transmute(simsID = ID,
+            fishID = fishID,
+            d18O = d18O,
+            distance_um = distance,
+            year = year)
+
+pikedata <- annu%>%
+  inner_join(sims, by = c("simsID", "fishID", "year"))
+
+pikedata_all <- pikedata%>%
+  inner_join(fishdata, by = "fishID")
+
+pikedata <- pikedata_all%>%
+  transmute(ID = fishID,
+            TL_mm = TL_mm,
+            weight = weight,
+            sex = sex,
+            area = area,
+            capt_date = cdate,
+            age = age,
+            cohort = cohort,
+            year = year,
+            inc_um = increment_um,
+            rad_um = rad_um,
+            core = core,
+            d18O = d18O,
+            sims_dist = distance_um)
+
+#save table
+write.table(pikedata, "Data/pike_data_d18O_years.txt", sep = "\t", 
+            dec = ".", row.names = F)
+#all fish have an edge increment that is counted as a year, only for fish caught between
+#01.01 and 31.04 this should be actually counted as year
+
+write.table(annu, "Data/annuli_with_rad.txt", sep = "\t", dec = ".", row.names = F)
+```
+
+```{r remove trace element core data, include=FALSE, echo=FALSE, eval=FALSE}
+
+rm(list = ls())
+
+#load in sims core clean and elements
+sims <- read.delim("Data/Otoliths/Otolith_data_clean_core_with_distance_um.txt", 
+                  header = T, stringsAsFactors = F, sep = "\t", dec = ".")
+sims <- sims%>%
+  group_by(ID)%>%
+  transmute(fishID = ID2[[3]],
+            d18O = d18O,
+            distance = Distance_um)
+
+#remove Pilot fish (for now)
+sims <- sims[grepl("F1", sims$ID)==F,]
+sims <- sims[grepl("#", sims$ID)==F,]
+sims <- sims[grepl("34", sims$ID)==F,]
+
+elements <- read.delim("Data/Otoliths/Otolith_LA-data_all_with_distance.txt", sep = "\t", 
+                       header = T, stringsAsFactors = F)
+
+elements <- elements%>%filter(Mount != "Pilot" )
+elements <- elements[grepl("34", elements$SIMS_ID)==F,]
+
+simsdist <- sims%>%arrange(desc(fishID))%>%
+  group_by(fishID)%>%
+  transmute(ID = fishID,
+            Maxdist = max(distance))%>%
+  distinct()
+
+elementdist <- elements%>%arrange(desc(Fish_ID))%>%
+  group_by(Fish_ID)%>%
+  transmute(ID = Fish_ID,
+            Maxdist = max(Distance_um))%>%
+  distinct()
+
+
+alldist <- simsdist%>%
+  inner_join(elementdist, by = "ID")
+
+alldist$coredist <- alldist$Maxdist.y-alldist$Maxdist.x
+
+#You could now automatize the removal of the core here
+```
+
+```{r divide trace elements into years, include=FALSE, echo=FALSE, eval=FALSE}
+
+rm(list = ls())
+
+#load pike data
+fishdata <- read.delim("Data/Otoliths/Scales_Oto_data.txt", header = T, 
+                       stringsAsFactors = F)
+names(fishdata) <- tolower(names(fishdata))
+fishdata <- fishdata%>%
+  transmute(fishID = id,
+            cdate = date,
+            TL_mm = tl,
+            weight = weight,
+            sex = sex,
+            area = area)
+
+#load annuli
+annu <- read.delim("Data/Otoliths/annuli_with_rad.txt", sep = "\t", header = T, 
+                   stringsAsFactors = F)
+
+#load trace elements
+elements <- read.delim("Data/Otoliths/Otolith_LA-data_all_clean_core_with_distance.txt", sep = "\t", 
+                       header = T, stringsAsFactors = F)
+elements <- elements%>%filter(Mount != "Pilot")
+names(elements) <- tolower(names(elements))
+#inverse order for distances
+elements <- elements %>% group_by(fish_id)%>%arrange(distance_um, by_group = F)%>%ungroup()%>%
+  arrange(fish_id)
+
+#remove 34
+elements <- elements[grepl("34", elements$sims_id)==F,]
+
+#Loop to break into years
+IDpike <- unique(elements$fish_id)
+radID <- unique(annu$year)
+y <- NULL
+yy <- NULL
+
+for (i in 1:length(IDpike)) {
+  for (j in 0:length(annu[which(annu$fishID==IDpike[i]), "year"])) {
+y <- ifelse(elements[which(elements$fish_id==IDpike[i]), "distance_um"]<
+                      annu[which(annu$fishID==IDpike[i]&annu$year==radID[j]), "rad_um"]&
+              elements[which(elements$fish_id==IDpike[i]), "distance_um"]
+              >=annu[which(annu$fishID==IDpike[i]&annu$year==radID[j-1]), "rad_um"],
+                    annu[which(annu$fishID==IDpike[i]&annu$year==radID[j]), "year"],
+            ifelse(elements[which(elements$fish_id==IDpike[i]), "distance_um"]>
+              max(annu[which(annu$fishID==IDpike[i]), "rad_um"])&
+                radID[j]==max(annu[which(annu$fishID==IDpike[i]), "year"]), 
+            max(annu[which(annu$fishID==IDpike[i]), "year"]),NA))
+yy <- c(yy, na.omit(y))
+  }
+}
+
+#test lengths (must be equal)
+
+length(elements[elements$fish_id == "BH-01594",]$distance_um)
+length(yy)
+
+elements$year <- yy
+
+#visual inspection
+ggplot(elements, aes(year, sr.ca))+stat_summary(fun = mean)+
+  scale_x_continuous(breaks = seq(1,13,1), labels = seq(1,13,1))+
+  theme_minimal()
+
+#prepare join
+elements <- elements%>%
+  transmute(simsID = sims_id,
+            fishID = fish_id,
+            Sr = sr.ca,
+            Na = na.ca,
+            Mg = mg.ca,
+            Ba = ba.ca,
+            Mn = mn.ca,
+            distance_um = distance_um,
+            year = year)
+
+pikedata <- annu%>%
+  inner_join(elements, by = c("fishID", "year"))
+
+pikedata_all <- pikedata%>%
+  inner_join(fishdata, by = "fishID")
+
+pikedata <- pikedata_all%>%
+  transmute(ID = fishID,
+            TL_mm = TL_mm,
+            weight = weight,
+            sex = sex,
+            area = area,
+            capt_date = cdate,
+            age = age,
+            cohort = cohort,
+            year = year,
+            inc_um = increment_um,
+            rad_um = rad_um,
+            core = core,
+            Sr = Sr,
+            Na = Na,
+            Mg = Mg,
+            Ba = Ba,
+            Mn = Mn,
+            LA_dist = distance_um)
+
+pikedata <- pikedata %>% group_by(ID)%>%arrange(LA_dist, by_group = F)%>%ungroup()%>%
+  arrange(ID)
+
+#filter out mother signal
+pike_no_core <- pikedata%>%filter(LA_dist >= core)
+
+#save table
+write.table(pikedata, "Data/pike_data_LA-ICPMS_years_with_core.txt", sep = "\t", 
+            dec = ".", row.names = F)
+write.table(pike_no_core, "Data/pike_data_LA-ICPMS_years_without_core.txt", sep = "\t", 
+            dec = ".", row.names = F)
+```
+
+```{r visual ceckup, include=FALSE, echo=FALSE, eval=FALSE}
+#script to plot each pike d18O & Sr/Ca plot into .png & compare them with annual
+#rings on pictures
+
+rm(list = ls())
+
+#load d18O data
+pike_d18O <- read.delim("Data/pike_data_d18O_years.txt", sep = "\t", dec = ".",
+                      header = T, stringsAsFactors = F)
+
+#load LA-ICPMS data
+pike_elements <- read.delim("Data/pike_data_LA-ICPMS_years_with_core.txt", sep = "\t",
+                            dec = ".", header = T, stringsAsFactors = F)
+
+IDOto <- unique(pike_elements$ID)
+
+#IDOto <- "BH-00355"
+
+#LA-ICPMS Plots
+for (i in 1:length(IDOto)) {
+  png(paste0("Test plots/LA-ICPMS/", IDOto[i], "_Sr.png"))
+  plot(pike_elements[which(pike_elements$ID == IDOto[i]), "LA_dist",], 
+       pike_elements[which(pike_elements$ID == IDOto[i]), "Sr",], main = "", 
+       xlab =  "", ylab = "", xlim = c(0, max(pike_elements[which(pike_elements$ID == IDOto[i]), "LA_dist",], na.rm = T)), 
+       col.axis = "black", cex.axis = 1.7, type = "l", col = "black", lwd = 2, fg = "black", cex = 2, axes = T, pch = 19)
+  abline(v = c(pike_elements[which(pike_elements$ID == IDOto[i]&
+                             pike_elements$year == 1), "rad_um"],
+               pike_elements[which(pike_elements$ID == IDOto[i]&
+                             pike_elements$year == 2), "rad_um"],
+               pike_elements[which(pike_elements$ID == IDOto[i]&
+                             pike_elements$year == 3), "rad_um"],
+               pike_elements[which(pike_elements$ID == IDOto[i]&
+                             pike_elements$year == 4), "rad_um"],
+               pike_elements[which(pike_elements$ID == IDOto[i]&
+                             pike_elements$year == 5), "rad_um"],
+               pike_elements[which(pike_elements$ID == IDOto[i]&
+                             pike_elements$year == 6), "rad_um"],
+               pike_elements[which(pike_elements$ID == IDOto[i]&
+                             pike_elements$year == 7), "rad_um"],
+               pike_elements[which(pike_elements$ID == IDOto[i]&
+                             pike_elements$year == 8), "rad_um"],
+               pike_elements[which(pike_elements$ID == IDOto[i]&
+                             pike_elements$year == 9), "rad_um"],
+               pike_elements[which(pike_elements$ID == IDOto[i]&
+                             pike_elements$year == 10), "rad_um"],
+               pike_elements[which(pike_elements$ID == IDOto[i]&
+                             pike_elements$year == 11), "rad_um"],
+               pike_elements[which(pike_elements$ID == IDOto[i]&
+                             pike_elements$year == 12), "rad_um"],
+               pike_elements[which(pike_elements$ID == IDOto[i]&
+                             pike_elements$year == 13), "rad_um"])) 
+  title(main = "", ylab = "Sr/Ca", cex.lab = 15, col.lab = "black", line = 30)
+  dev.off()  
+}
+
+pike_elements[pike_elements$ID == "BH-91328",]
+
+#d18O plots
+IDOto <- unique(pike_d18O$ID)
+
+for (i in 1:length(IDOto)) {
+  png(paste0("Test plots/d18O/", IDOto[i], "_Sr.png"))
+  plot(pike_d18O[which(pike_d18O$ID == IDOto[i]), "sims_dist",], 
+       pike_d18O[which(pike_d18O$ID == IDOto[i]), "d18O",], main = "", 
+       xlab =  "", ylab = "", xlim = c(0, max(pike_d18O[which(pike_d18O$ID == IDOto[i]), "sims_dist",], na.rm = T)), 
+       col.axis = "black", cex.axis = 1.7, type = "l", col = "black", lwd = 2, fg = "black", cex = 2, axes = T, pch = 19)
+  abline(v = c(pike_d18O[which(pike_d18O$ID == IDOto[i]&
+                             pike_d18O$year == 1), "rad_um"],
+               pike_d18O[which(pike_d18O$ID == IDOto[i]&
+                             pike_d18O$year == 2), "rad_um"],
+               pike_d18O[which(pike_d18O$ID == IDOto[i]&
+                             pike_d18O$year == 3), "rad_um"],
+               pike_d18O[which(pike_d18O$ID == IDOto[i]&
+                             pike_d18O$year == 4), "rad_um"],
+               pike_d18O[which(pike_d18O$ID == IDOto[i]&
+                             pike_d18O$year == 5), "rad_um"],
+               pike_d18O[which(pike_d18O$ID == IDOto[i]&
+                             pike_d18O$year == 6), "rad_um"],
+               pike_d18O[which(pike_d18O$ID == IDOto[i]&
+                             pike_d18O$year == 7), "rad_um"],
+               pike_d18O[which(pike_d18O$ID == IDOto[i]&
+                             pike_d18O$year == 8), "rad_um"],
+               pike_d18O[which(pike_d18O$ID == IDOto[i]&
+                             pike_d18O$year == 9), "rad_um"],
+               pike_d18O[which(pike_d18O$ID == IDOto[i]&
+                             pike_d18O$year == 10), "rad_um"],
+               pike_d18O[which(pike_d18O$ID == IDOto[i]&
+                             pike_d18O$year == 11), "rad_um"],
+               pike_d18O[which(pike_d18O$ID == IDOto[i]&
+                             pike_d18O$year == 12), "rad_um"],
+               pike_d18O[which(pike_d18O$ID == IDOto[i]&
+                             pike_d18O$year == 13), "rad_um"])) 
+  title(main = "", ylab = "d18O", cex.lab = 15, col.lab = "black", line = 30)
+  dev.off()  
+}
+
+```
+
+```{r profile plots, include=FALSE, echo=FALSE, eval=FALSE}
+#script to calculate profile plots for d18O and Sr/Ca
+rm(list = ls())
+
+LA <- read.delim("Data/pike_data_LA-ICPMS_years_with_core.txt", header = T,
+                stringsAsFactors = F, sep = "\t", dec = ".")
+
+LA <- LA%>%
+  transmute(ID = ID,
+            capt = area,
+            area = case_when(area %in% "Peene" ~ "Freshwater",
+                             area %in% "Barthe" ~ "Freshwater",
+                             area %in% "NHG" ~ "Ana",
+                             area %in% "Sehrowbach" ~ "Ana",
+                             area %in% "Bandycksgraben" ~ "Ana",
+                             area %in% "Ziese" ~ "Ana",
+                             area %in% "KB" ~ "Marine",
+                             area %in% "SB" ~ "Marine",
+                             area %in% "WB" ~ "Marine",
+                             area %in% "BEG" ~ "Marine", 
+                             area %in% "KJB" ~ "Marine",
+                             area %in% "GJB" ~ "Marine",
+                             area %in% "GB" ~ "Marine",
+                             area %in% "KD" ~ "control",
+                             TRUE ~ "NA"),
+            Sr = Sr,
+            Na = Na,
+            Mg = Mg,
+            Ba = Ba,
+            Mn = Mn,
+            LA_dist = LA_dist)
+
+d18O <- read.delim("Data/pike_data_d18O_years.txt", header = T,
+                stringsAsFactors = F, sep = "\t", dec = ".")
+
+d18O <- d18O%>%
+  transmute(ID = ID,
+            capt = area,
+            area = case_when(area %in% "Peene" ~ "Freshwater",
+                             area %in% "Barthe" ~ "Freshwater",
+                             area %in% "NHG" ~ "Freshwater",
+                             area %in% "Sehrowbach" ~ "Freshwater",
+                             area %in% "Bandycksgraben" ~ "Freshwater",
+                             area %in% "Ziese" ~ "Freshwater",
+                             area %in% "KB" ~ "Marine",
+                             area %in% "SB" ~ "Marine",
+                             area %in% "WB" ~ "Marine",
+                             area %in% "BEG" ~ "Marine", 
+                             area %in% "KJB" ~ "Marine",
+                             area %in% "GJB" ~ "Marine",
+                             area %in% "GB" ~ "Marine",
+                             area %in% "KD" ~ "Freshwater",
+                             TRUE ~ "NA"),
+            d18O = d18O,
+            sims_dist = sims_dist)
+
+
+LA <- LA %>% drop_na()
+
+
+# Loop--------------------------------------------------------------------------
+
+
+IDOto <- unique(d18O$ID)
+
+for (i in 1:length(IDOto)) {
+  png(paste0("Data/Otoplots/", IDOto[i], ".png"), width = 1200)
+  par(mfrow = c(1,2), xaxs = "i", mar = c(10,10,1,0))
+  plot(LA[which(LA$ID == IDOto[i]), "LA_dist",], 
+       LA[which(LA$ID == IDOto[i]), "Sr",], main = "", 
+       xlab =  "", ylab = "", 
+       xlim = c(0, max(LA[which(LA$ID == IDOto[i]), "LA_dist",], na.rm = T)),
+       ylim = c(0, max(LA$Sr, na.rm = T)),
+       col.axis = "black", cex.axis = 1, type = "l", col = "orange", lwd = 3, 
+       fg = "black", cex = 1, axes = FALSE, pch = 19)
+  axis(1, pos = mean(LA[LA$area == "Freshwater",]$Sr, na.rm = T), 
+       at = c(0, 200, max(LA$LA_dist)),
+       labels = c("", "FW", ""), lwd.ticks = 0, tck = 0, 
+       col = "blue", lty = 1, lwd = 1, mgp = c(0,0,0))
+  axis(1, pos = mean(LA[LA$area == "Freshwater",]$Sr, na.rm = T)+
+         sd(LA[LA$area == "Freshwater",]$Sr, na.rm = T), 
+       at = c(0, 200, max(LA$LA_dist)),
+       labels = c("", "", ""), lwd.ticks = 0, tck = 0, 
+       col = "blue", lty = 3, lwd = 1, mgp = c(0,0,0))
+  axis(1, pos = mean(LA[LA$area == "Freshwater",]$Sr, na.rm = T)-
+         sd(LA[LA$area == "Freshwater",]$Sr, na.rm = T), 
+       at = c(0, 200, max(LA$LA_dist)),
+       labels = c("", "", ""), lwd.ticks = 0, tck = 0, 
+       col = "blue", lty = 3, lwd = 1, mgp = c(0,0,0))
+  axis(1, pos = mean(LA[LA$area == "Marine",]$Sr, na.rm = T), 
+       at = c(0, 200, max(LA$LA_dist)),
+       labels = c("", "SW", ""), lwd.ticks = 0, tck = 0, 
+       col = "orange", lty = 1, lwd = 1, mgp = c(0,0,0))
+  axis(1, pos = mean(LA[LA$area == "Marine",]$Sr, na.rm = T)-
+         sd(LA[LA$area == "Marine",]$Sr, na.rm = T), 
+       at = c(0, 200, max(LA$LA_dist)),
+       labels = c("", "", ""), lwd.ticks = 0, tck = 0, 
+       col = "orange", lty = 3, lwd = 1, mgp = c(0,0,0))
+  axis(1, pos = mean(LA[LA$area == "Marine",]$Sr, na.rm = T)+
+         sd(LA[LA$area == "Marine",]$Sr, na.rm = T), 
+       at = c(0, 200, max(LA$LA_dist)),
+       labels = c("", "", ""), lwd.ticks = 0, tck = 0, 
+       col = "orange", lty = 3, lwd = 1, mgp = c(0,0,0))
+  axis(1, pos = 0, at = seq(0, max(LA$LA_dist), 500),
+       labels = seq(0, max(LA$LA_dist), 500), lwd.ticks = 5, tck = 0, 
+       col = "black", lty = 1, lwd = 2, mgp = c(0, 0.5, 0))
+  axis(2, pos = 0, tcl = 0.2,
+       at = seq(round(min(LA$Sr),3), 
+                round(max(LA$Sr),3), 0.001), 
+       labels = seq(round(min(LA$Sr),3), 
+                    round(max(LA$Sr),3), 0.001),
+       las = 2, mgp = c(0, 0.5, 0), cex.axis = 1, 
+       lwd = 2, col = "black", col.axis = "black")
+  title(ylab = "Sr/Ca", cex.lab = 1, 
+        col.lab = "black", line = 5)
+  title(xlab = "Distance [um]", cex.lab = 1, 
+        col.lab = "black", line = 1)
+  title(main = "Sr/Ca ratio")
+  text(x = 300, y = 0.009, labels = LA[which(LA$ID == IDOto[i]), "capt",])
+ 
+  plot(d18O[which(d18O$ID == IDOto[i]), "sims_dist",], 
+       d18O[which(d18O$ID == IDOto[i]), "d18O",], main = "", 
+       xlab =  "", ylab = "", 
+       xlim = c(0, max(d18O[which(d18O$ID == IDOto[i]), "sims_dist",], na.rm = T)),
+       ylim = c(min(d18O$d18O, na.rm = T), 0),
+       col.axis = "black", cex.axis = 1, type = "b", col = "blue", lwd = 3, 
+       fg = "black", cex = 1, axes = FALSE, pch = 19)
+  axis(1, pos = mean(d18O[which(d18O$ID == IDOto[i]), "d18O",], na.rm = T), 
+       at = c(0, 200, max(d18O[which(d18O$ID == IDOto[i]), "sims_dist",], na.rm = T)),
+       labels = c("", "indiv.mean", ""), lwd.ticks = 0, tck = 0, 
+       col = "black", lty = 3, lwd = 1, mgp = c(0,0,0))
+  axis(1, pos = mean(d18O$d18O, na.rm = T), 
+       at = c(0, 200, max(d18O$sims_dist)),
+       labels = c("", "global mean", ""), lwd.ticks = 0, tck = 0, 
+       col = "black", lty = 1, lwd = 1, mgp = c(0,0,0))
+  axis(1, pos = round(min(d18O$d18O), 1), at = seq(0, max(d18O$sims_dist), 500),
+       labels = seq(0, max(d18O$sims_dist), 500), lwd.ticks = 5, tck = 0, 
+       col = "black", lty = 1, lwd = 2, mgp = c(0, 0.5, 0))
+  axis(2, pos = 0, tcl = 0.2,
+       at = seq(round(min(d18O$d18O, na.rm = T),1), 
+                round(max(d18O$d18O, na.rm = T),1), 1), 
+       labels = seq(round(min(d18O$d18O, na.rm = T),1), 
+                    round(max(d18O$d18O, na.rm = T),1), 1),
+       las = 2, mgp = c(0, 0.5, 0), cex.axis = 1, 
+       lwd = 2, col = "black", col.axis = "black")
+  title(ylab = "d18O", cex.lab = 1, 
+        col.lab = "black", line = 5)
+  title(xlab = "Distance [um]", cex.lab = 1, 
+        col.lab = "black", line = 1)
+  title(main = "d18O")
+  text(x = 300, y = 0, labels = d18O[which(d18O$ID == IDOto[i]), "capt",])
+  dev.off()  
+}
+
+write.csv2(unique(d18O[,1:2]), file = "Data/Otoliths/IDlist.csv", row.names = F)
+
+#Graphical adjustments
+
+par(xaxs = "i", mar = c(0, 0, 0, 5))
+plot(Oto_profiles[which(Oto_profiles$SIMS_ID == "O"), "Distance_um",], Oto_profiles[Oto_profiles$SIMS_ID == "O",]$Sr.Ca, main = "", 
+     xlab =  "", ylab = "", xlim = c(0, max(Oto_profiles[Oto_profiles$SIMS_ID == "O",]$Distance_um)),
+     col.axis = "black", cex.axis = 1.7, type = "o", col = "black", lwd = 3, fg = "black", cex = 1, axes = FALSE)
+axis(1, pos = mean(Oto_profiles[Oto_profiles$SIMS_ID == "O",]$Sr.Ca), at = c(0, max(Oto_profiles[Oto_profiles$SIMS_ID == "O",]$Distance_um)),
+     labels = FALSE, lwd.ticks = 5, tck = 0)
+axis(1, pos = mean(Oto_profiles$Sr.Ca), at = c(0, max(Oto_profiles$Distance_um)),
+     labels = FALSE, lwd.ticks = 5, tck = 0)
+axis(2, pos = max(Oto_profiles[which(Oto_profiles$SIMS_ID == "O"), "Distance_um",]), tcl = 0.2,
+     at = seq(round(min(Oto_profiles[Oto_profiles$SIMS_ID == "O",]$Sr.Ca),3), round(max(Oto_profiles[Oto_profiles$SIMS_ID == "O",]$Sr.Ca),3), 0.001), 
+     labels = seq(round(min(Oto_profiles[Oto_profiles$SIMS_ID == "O",]$Sr.Ca),3), round(max(Oto_profiles[Oto_profiles$SIMS_ID == "O",]$Sr.Ca),3), 0.001),
+     las = 2, mgp = c(0, -5, 2), cex.axis = 2, lwd = 3)
+
+
+# Only plots--------------------------------------------------------------------
+
+for (i in 1:length(IDOto)) {
+  png(paste(IDOto[i], ".png"), width = Oto_sizes[which(Oto_sizes$ID == IDOto[i]), "Size.x.",], 
+      height = 0.5 * Oto_sizes[which(Oto_sizes$ID == IDOto[i]), "Size.x.",], units = "px", bg = "white")
+  par(xaxs = "i", mar = rep(5,4))
+  plot(Otocore_profiles[which(Otocore_profiles$ID == IDOto[i]), "Distance_um",], 
+       Otocore_profiles[which(Otocore_profiles$ID == IDOto[i]), "d18O",], main = "", 
+       xlab =  "Distance from Core [\U03BCm]", ylab = "\211 relative to VPDB", 
+       col.axis = "black", cex.axis = 3, type = "b", col = "black", lwd = 4, fg = "black", cex = 3, frame.plot = F, cex.lab = 2)
+  box(bty = "l")
+  dev.off()  
+}
+
+#Graphics-----------------------------------------------------------------------
+
+par(xaxs = "i", mar = rep(5, 4))
+plot(Oto_profiles[which(Oto_profiles$ID == IDOto[i] & Oto_profiles$Distance_um > 200), "Distance_um",], 
+     Oto_profiles[which(Oto_profiles$ID == IDOto[i] & Oto_profiles$Distance_um > 200), "d18O"], main = "", 
+     xlab =  "Distance from Core [\U03BCm]", ylab = "\211 relative to VPDB",
+     col.axis = "black", cex.axis = 2, type = "b", col = "black", lwd = 3, fg = "black", cex = 2, frame.plot = F, cex.lab = 2)
+box(bty = "l")
+
+#Isorange
+IDOto <- unique(Oto_profiles$ID)
+Maxiso <- NULL
+for (i in 1:length(IDOto)){
+  M <- max(Oto_profiles[which(Oto_profiles$ID == IDOto[i]), "d18O",])
+  Maxiso <- c(Maxiso, M)
+}
+
+Miniso <- NULL
+for (i in 1:length(IDOto)){
+  m <- min(Oto_profiles[which(Oto_profiles$ID == IDOto[i]), "d18O",])
+  Miniso <- c(Miniso, m)
+}
+Iso <- data.frame("Min" = Miniso, "Max" = Maxiso, "Range" = Miniso - Maxiso)
+mean(Iso$Range, na.rm = T)
+
+ggplot() + geom_point(aes(Oto_profiles[which(Oto_profiles$ID == "19"), "Distance_um",], Oto_profiles[Oto_profiles$ID == "19",]$d18O))+
+  geom_line(aes(Oto_profiles[which(Oto_profiles$ID == "19"), "Distance_um",], Oto_profiles[Oto_profiles$ID == "19",]$d18O))+
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black", size = 1), 
+        axis.text = element_text(colour = "black", size = 18), axis.title = element_text(colour = "black", size = 18),
+        panel.grid.major.y = element_blank())+
+  scale_y_continuous(limits = c(-8, -2), breaks = c(-7:-2))+
+  geom_hline(yintercept = mean(Oto_profiles[Oto_profiles$ID == "19",]$d18O))+
+  geom_hline(yintercept = mean(Oto_profiles$d18O), linetype = "dotted")+
+  xlab("Distance from core ([\U03BCm])") + ylab("\211 relative to VPDB")
+
+
+```
+
+```{r annual means, include=FALSE}
+rm(list = ls())
+
+#load in data
+#load d18O data
+pike_d18O <- read.delim("Data/pike_data_d18O_years.txt", sep = "\t", dec = ".",
+                      header = T, stringsAsFactors = F)
+
+#load LA-ICPMS data
+pike_elements <- read.delim("Data/pike_data_LA-ICPMS_years_without_core.txt",
+                            sep = "\t",dec = ".", header = T, 
+                            stringsAsFactors = F)
+
+#load visually assigned IDs
+ecotypes <- read.csv2("Data/Otoliths/IDlist_ecotypes.csv", header = T)
+
+#annual means
+pike_d18Omeans <- pike_d18O%>%
+  group_by(ID, year)%>%
+  summarise(ID = ID,
+            TL_mm = TL_mm,
+            weight = weight,
+            sex = sex,
+            area = area,
+            capt_date = capt_date,
+            age = age,
+            cohort = cohort,
+            year = year,
+            inc_um = inc_um,
+            rad_um = rad_um,
+            core = core,
+            d18O = mean(d18O, na.rm = T))%>%
+  ungroup()%>%
+  distinct()
+
+#remove core from LA-ICPMS, form means
+pike_elemeans_nocore <- pike_elements%>%
+  filter(LA_dist>=core)%>%
+  group_by(ID, year)%>%
+  summarise(ID = ID,
+            TL_mm = TL_mm,
+            weight = weight,
+            sex = sex,
+            area = area,
+            capt_date = capt_date,
+            age = age,
+            cohort = cohort,
+            year = year,
+            inc_um = inc_um,
+            rad_um = rad_um,
+            core = core,
+            Sr = median(Sr, na.rm = T),
+            Na = mean(Na, na.rm = T),
+            Mg = mean(Mg, na.rm = T),
+            Ba = mean(Ba, na.rm = T),
+            Mn = mean(Mn, na.rm = T))%>%
+  ungroup()%>%
+  distinct()
+
+Addition <- data.frame(ID="BH-00356", year=8, TL_mm=815, weight=3000, sex="f",
+                       area="Peene", capt_date="9.7.2019", age=7, cohort=2012,
+                       inc_um=164.5, rad_um=2169.0, core=229.3, Sr=NA, Na=NA, 
+                       Mg=NA, Ba=NA, Mn=NA)
+
+pike_elemeans_nocore <- rbind(pike_elemeans_nocore, Addition)
+
+#with core
+pike_elemeans_core <- pike_elements%>%
+  group_by(ID, year)%>%
+  summarise(ID = ID,
+            TL_mm = TL_mm,
+            weight = weight,
+            sex = sex,
+            area = area,
+            capt_date = capt_date,
+            age = age,
+            cohort = cohort,
+            year = year,
+            inc_um = inc_um,
+            rad_um = rad_um,
+            core = core,
+            Sr = mean(Sr, na.rm = T),
+            Na = mean(Na, na.rm = T),
+            Mg = mean(Mg, na.rm = T),
+            Ba = mean(Ba, na.rm = T),
+            Mn = mean(Mn, na.rm = T))%>%
+  ungroup()%>%
+  distinct()
+
+Addition <- data.frame(ID="BH-00356", year=8, TL_mm=815, weight=3000, sex="f",
+                       area="Peene", capt_date="9.7.2019", age=7, cohort=2012,
+                       inc_um=164.5, rad_um=2169.0, core=229.3, Sr=NA, Na=NA, 
+                       Mg=NA, Ba=NA, Mn=NA)
+
+pike_elemeans_core <- rbind(pike_elemeans_core, Addition)
+
+center_scale <- function(x){
+  scale(x, scale = F)
+}
+
+#join with d18O, no core
+Alldata_nocore <- pike_elemeans_nocore%>%
+  inner_join(pike_d18Omeans, by=c("ID", "year"))%>%
+  transmute(ID = as.factor(ID),
+            year = as.factor(year),
+            TL_mm = TL_mm.x,
+            weight = weight.x,
+            sex = as.factor(sex.x),
+            area = area.x,
+            capt_date = capt_date.x,
+            age = age.x,
+            cohort = cohort.x,
+            inc_um = inc_um.x,
+            rad_um = rad_um.x,
+            core = core.x,
+            d18O = d18O,
+            Sr = Sr,
+            Na = Na,
+            Mg = Mg,
+            Ba = Ba,
+            Mn = Mn)%>%
+  inner_join(ecotypes, by = c("ID"))%>%
+  transmute(ID = ID,
+            year = year,
+            TL_mm = TL_mm,
+            weight = weight,
+            sex = sex,
+            waterbody = area.x,
+            area = area.y,
+            capt_date = capt_date,
+            age = age,
+            cohort = cohort,
+            inc_um = inc_um,
+            rad_um = rad_um,
+            core = core,
+            ecotype = Ecotype,
+            Temperature = Temperature,
+            d18O = d18O,
+            Sr = Sr,
+            Na = Na,
+            Mg = Mg,
+            Ba = Ba,
+            Mn = Mn,
+            comment = comment)%>%
+  distinct()
+
+#with core
+Alldata <- pike_elemeans_core%>%
+  inner_join(pike_d18Omeans, by=c("ID", "year"))%>%
+  transmute(ID = as.factor(ID),
+            year = as.factor(year),
+            TL_mm = TL_mm.x,
+            weight = weight.x,
+            sex = as.factor(sex.x),
+            area = area.x,
+            capt_date = capt_date.x,
+            age = age.x,
+            cohort = cohort.x,
+            inc_um = inc_um.x,
+            rad_um = rad_um.x,
+            core = core.x,
+            d18O = d18O,
+            Sr = Sr,
+            Na = Na,
+            Mg = Mg,
+            Ba = Ba,
+            Mn = Mn)%>%
+  inner_join(ecotypes, by = c("ID"))%>%
+  transmute(ID = ID,
+            year = year,
+            TL_mm = TL_mm,
+            weight = weight,
+            sex = sex,
+            waterbody = area.x,
+            area = area.y,
+            capt_date = capt_date,
+            age = age,
+            cohort = cohort,
+            inc_um = inc_um,
+            rad_um = rad_um,
+            core = core,
+            ecotype = Ecotype,
+            Temperature = Temperature,
+            d18O = d18O,
+            Sr = Sr,
+            Na = Na,
+            Mg = Mg,
+            Ba = Ba,
+            Mn = Mn,
+            comment = comment)%>%
+  distinct()
+```
+
+# Hypothesis 1: Thermosaline niche shifts
+The first hypothesis formulated for this chapter predicts pike to differ significantly in thermosaline niche between life stages, with young pike inhabiting a warmer, less saline niche that continuously becomes colder and more saline as pike grow. To analyze this, I calculated the mean d18O and Sr/Ca values for each individual and year. I assigned an area based on whether the fish was caught in the Bodden or in freshwater. I did not separate the anadromous fish for this step, as there are too few of them to form confident means. The d18O and Sr signatures grouped by years provide the hypothesis with evidence, as the d18O signature of the first year seems to be significantly lower than all consecutive years for marine pike (Fig. 1 A), and the d18O signature increases during the entire life, indicating a constant shift towards colder water during the life history. This also shows for freswater-caught pike (including the anadromous sample, Fig. 1 A), however, the d18O signature for these is significantly lower than for Boddenpike, likely caused by higher d18O water in the lagoons. The Sr/Ca data of the pike also provides evidence for the hypothesis, as the lagoon pike increase in Sr/Ca signal constantly during their life (Fig. 1 B). However, the mean Sr/Ca values seem to reach a plateau after year 5 (if this corresponds to physiological limits of a freshwater fish cannot be answered with confidence in this analysis) and no significant increase occurs thereafter. As expected, the Sr/Ca values of the freshwater pike show no significant increase over the life history. The slight trend that can be observed in Fig. 1 B is due to the anadromous fish included in the freshwater sample, which also increase in salinity in later life stages.
+
+```{r lifelong niche, echo=FALSE, dpi=600, warning=FALSE, message=FALSE, fig.cap="Figure1: Lifelong thermosaline niche of all pike in the sample. A: Mean d18O values for each year of life, B: Mean Sr values for each year of life.Colors indicate life history strategy, marine Bodden pike (blue), anadromous pike (red) and freshwater pike (green)" }
+#script to form annual means of elemental data for clustering and increment analysis
+
+#Answer hypothesis 2
+Alldata <- Alldata[Alldata$comment!="Vaterite",]
+Alldata$area <- ifelse(Alldata$area=="Freshwater"&Alldata$ecotype=="A"|
+                         Alldata$area=="Freshwater"&Alldata$ecotype=="I",
+                       "Anadromous", Alldata$area)
+Alldata$year <- as.factor(Alldata$year)
+
+Alldata_nocore <- Alldata_nocore[Alldata_nocore$comment!="Vaterite",]
+Alldata_nocore$area <- ifelse(Alldata_nocore$area=="Freshwater"&Alldata_nocore$ecotype=="A"|
+                         Alldata_nocore$area=="Freshwater"&Alldata_nocore$ecotype=="I",
+                       "Anadromous", Alldata_nocore$area)
+Alldata_nocore$year <- as.factor(Alldata_nocore$year)
+
+
+#Lifelong increase in d18O --> colder the older
+A <- ggplot(Alldata[Alldata$waterbody!="KD",], aes(year, d18O))+
+  geom_boxplot(aes(color = area), width = 0.5)+
+  scale_x_discrete(limits = factor(1:10))+
+  theme(legend.position = "bottom")+
+  theme_minimal()
+#Lifelong increase in Sr/Ca --> saltier the older
+B <- ggplot(Alldata[Alldata$waterbody!="KD",], aes(year, Sr))+
+  geom_boxplot(aes(color = area), width = 0.5, show.legend = F)+
+  scale_x_discrete(limits = factor(1:10))+
+  theme(legend.position = "bottom")+
+  theme_minimal()
+
+AB <- ggarrange(A, B, ncol = 2, nrow = 1, labels = c("A", "B"), common.legend = TRUE,
+                legend = "bottom")
+AB
+
+Water_var <- (range(LUNGdata_months[LUNGdata_months$waterbody=="Grabow"|
+                                LUNGdata_months$waterbody=="Kubitzer Bodden"|
+                                LUNGdata_months$waterbody=="Rassower Strom"|
+                                LUNGdata_months$waterbody=="Vitter Bodden"|
+                                LUNGdata_months$waterbody=="Schaproder Bodden"|
+                                LUNGdata_months$waterbody=="Schaproder Bodden"
+                                ,]$SAL, na.rm = T)[2]-
+  range(LUNGdata_months[LUNGdata_months$waterbody=="Grabow"|
+                                LUNGdata_months$waterbody=="Kubitzer Bodden"|
+                                LUNGdata_months$waterbody=="Rassower Strom"|
+                                LUNGdata_months$waterbody=="Vitter Bodden"|
+                                LUNGdata_months$waterbody=="Schaproder Bodden"|
+                                LUNGdata_months$waterbody=="Schaproder Bodden"
+                                ,]$SAL, na.rm = T)[1])
+Water_var*0.23
+
+ Pike_var <- range(pike_d18Omeans[pike_d18Omeans$area=="SB"|pike_d18Omeans$area=="KB",]$d18O)[2]-range(pike_d18Omeans[pike_d18Omeans$area=="SB"|pike_d18Omeans$area=="KB",]$d18O)[1]
+```
+
+# Hypothesis 2: Effects of salinity on growth
+The first hypothesis "Salinities exceeding a reported optimum of 2 PSU have a negative effect on growth performance of pike that reverses with increasing age and body size of the fish" can only be answered by calculating absolute salinity from otolith Sr/Ca or d18O (note that this "optimum" stands on a rather thin evidence base - one old paper - and thus, the hypothesis could be reformulated to be more general, e.g. salinity bad for small but good for large fish). However, Fig. 2 shows what could be the answer to that hypothesis. The incement widths of all pike from the Bodden, including the anadromous pike, were plotted against the raw Sr/Ca ratio. Pike increment widths seemed to have a negative correlation with Sr/Ca for the first three years as well as for the fifth year, after that, increment widths correlated positively with Sr/Ca. This would agree with the hypothesis and ecological theory, as salinity is less of a stressor the larger a pike becomes, and other factors that might be beneficial for growth, such as marine prey, might outweigh the osmoregulatory investment in later years. As you can see, the $R^{2}$ values indicate a bad fit for the regression lines. This is likely a result of the differences in SIMS-transects positions and -length, along which the aging has been performed. The transect lines were not chosen in a standardized manner, but rather to maximise the data quality. Therefore, the increment widths are only comparable within an individual. A possible solution for his could be to reassign annuli along a standardized line and assign the yearly mean d18O-values calculated along the transect lines to the new annuli. Another solution could be to calculate an individual metric for growth performance that takes this into account, e.g. $\Omega$, and correlate that with Sr **OR** absolute salinity. A third option would be to back-calculate the total length of the fish via a body-proportional equation (e.g. Fraser-Lee), as this would take into account the relative proportions of an individual otolith (ind. radius divided by ind. otolith radius).
+
+```{r salinity, echo=FALSE, warning=FALSE, message=FALSE, fig.dim=c(2,5), dpi=600, fig.cap="Figure 2: Effects of salinity as approximated by mean Sr value per year on growth, as approximated by otolith increment width, in different life stages (years) of pike. Red points are individuals, blue line is a linear regression line, shaded area are the confidence intervals of the regression. Equation and R-square value are annotated in the top left corner of each plot"}
+#script to test salinity hypothesis
+
+pikeyear1 <- Alldata_nocore%>%filter(year==1, waterbody != "KD")
+pikeyear2 <- Alldata_nocore%>%filter(year==2, waterbody != "KD")
+pikeyear3 <- Alldata_nocore%>%filter(year==3, waterbody != "KD")
+pikeyear4 <- Alldata_nocore%>%filter(year==4, waterbody != "KD")
+pikeyear5 <- Alldata_nocore%>%filter(year==5, waterbody != "KD")
+pikeyear6 <- Alldata_nocore%>%filter(year==6, waterbody != "KD")
+pikeyear7 <- Alldata_nocore%>%filter(year==7, waterbody != "KD")
+pikeyear8 <- Alldata_nocore%>%filter(year==8, waterbody != "KD")
+pikeyear9 <- Alldata_nocore%>%filter(year==9, waterbody != "KD")
+pikeyear10 <- Alldata_nocore%>%filter(year==10, waterbody != "KD")
+
+my.formula <- y ~ x
+
+Y1 <- ggplot(pikeyear1[pikeyear1$area=="Marine",], 
+             aes(inc_um,Sr))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 1", y = "Sr", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+  
+
+Y2 <- ggplot(pikeyear2[pikeyear2$area=="Marine"|pikeyear2$ecotype=="A",], 
+             aes(inc_um,Sr))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 2", y = "Sr", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+Y3 <- ggplot(pikeyear3[pikeyear3$area=="Marine"|pikeyear3$ecotype=="A",], 
+             aes(inc_um,Sr))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 3", y = "Sr", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+Y4 <- ggplot(pikeyear4[pikeyear4$area=="Marine"|pikeyear4$ecotype=="A",], 
+             aes(inc_um,Sr))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 4", y = "Sr", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+Y5 <- ggplot(pikeyear5[pikeyear5$area=="Marine"|pikeyear5$ecotype=="A",], 
+             aes(inc_um,Sr))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 5", y = "Sr", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+Y6 <- ggplot(pikeyear6[pikeyear6$area=="Marine"|pikeyear6$ecotype=="A",], 
+             aes(inc_um,Sr))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 6", y = "Sr", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+Y7 <- ggplot(pikeyear7[pikeyear7$area=="Marine"|pikeyear7$ecotype=="A",], 
+             aes(inc_um,Sr))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 7", y = "Sr", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+Y8 <- ggplot(pikeyear8[pikeyear8$area=="Marine"|pikeyear8$ecotype=="A",], 
+             aes(inc_um,Sr))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 8", y = "Sr", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+Y9 <- ggplot(pikeyear9[pikeyear9$area=="Marine"|pikeyear9$ecotype=="A",], 
+             aes(inc_um,Sr))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 9", y = "Sr", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+Y10 <- ggplot(pikeyear10[pikeyear10$area=="Marine"|pikeyear10$ecotype=="A",], 
+              aes(inc_um,Sr))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 10", y = "Sr", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+P <- ggarrange(Y1, Y2, Y3, Y4, Y5, Y6, Y7, Y8, Y9, Y10, nrow = 5, ncol = 2)
+P
+```
+
+# Hypothesis 3
+Although not included in earlier plans of this work, it seems a logical step to also include a specific hypothesis for temperature alongside the salinity hypothesis. From the literature, one would expect for temperature to have a positive effect on the growth of young and small fish, but a negative effect on growth of older and larger fish. Plotting the increment widths against mean d18O values, which were assumed a good proxy for temperature, for each year and individual, revealed a negative correlation between d18O and increment width for all years except te oldest fish analyzed (year 10, Fig. 3). As more negative d18O values indicate a lighter signal and therefore higher temperature, this suggests a positive effect of temperature on pike growth throughout nearly the entire age gradient (Fig. 3). However, the fit of the lines, again, is rather bad, for reasons and possible remedies, see above...
+
+```{r Temperature, echo=FALSE, dpi=600, warning=FALSE, message=FALSE, fig.width=2, fig.height=5, fig.cap="Figure 3: Effects of temperature, as approximated by mean d18O value on growth, as approximated by otolith increment width, in different life stages (years) of pike. Red points are individuals, blue line is a linear regression line, shaded area are the confidence intervals of the regression. Equation and R-square value are annotated in the top left corner of each plot. More negative values of d18O indicate warmer temperatures, more positive values indicate colder temperatures"}
+#script to test temperature hypothesis
+
+pikeyear1 <- Alldata_nocore%>%filter(year==1, waterbody != "KD")
+pikeyear2 <- Alldata_nocore%>%filter(year==2, waterbody != "KD")
+pikeyear3 <- Alldata_nocore%>%filter(year==3, waterbody != "KD")
+pikeyear4 <- Alldata_nocore%>%filter(year==4, waterbody != "KD")
+pikeyear5 <- Alldata_nocore%>%filter(year==5, waterbody != "KD")
+pikeyear6 <- Alldata_nocore%>%filter(year==6, waterbody != "KD")
+pikeyear7 <- Alldata_nocore%>%filter(year==7, waterbody != "KD")
+pikeyear8 <- Alldata_nocore%>%filter(year==8, waterbody != "KD")
+pikeyear9 <- Alldata_nocore%>%filter(year==9, waterbody != "KD")
+pikeyear10 <- Alldata_nocore%>%filter(year==10, waterbody != "KD")
+
+Y1 <- ggplot(pikeyear1[pikeyear1$area=="Marine"|pikeyear2$ecotype=="A",], 
+             aes(inc_um,d18O))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 1", y = "d18O", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+Y2 <- ggplot(pikeyear2[pikeyear2$area=="Marine"|pikeyear2$ecotype=="A",], 
+             aes(inc_um,d18O))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 2", y = "d18O", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+Y3 <- ggplot(pikeyear3[pikeyear3$area=="Marine"|pikeyear3$ecotype=="A",], 
+             aes(inc_um,d18O))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 3", y = "d18O", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+Y4 <- ggplot(pikeyear4[pikeyear4$area=="Marine"|pikeyear4$ecotype=="A",], 
+             aes(inc_um,d18O))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 4", y = "d18O", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+Y5 <- ggplot(pikeyear5[pikeyear5$area=="Marine"|pikeyear5$ecotype=="A",], 
+             aes(inc_um,d18O))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 5", y = "d18O", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+Y6 <- ggplot(pikeyear6[pikeyear6$area=="Marine"|pikeyear6$ecotype=="A",], 
+             aes(inc_um,d18O))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 6", y = "d18O", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+Y7 <- ggplot(pikeyear7[pikeyear7$area=="Marine"|pikeyear7$ecotype=="A",], 
+             aes(inc_um,d18O))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 7", y = "d18O", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+Y8 <- ggplot(pikeyear8[pikeyear8$area=="Marine"|pikeyear8$ecotype=="A",], 
+             aes(inc_um,d18O))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 8", y = "d18O", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+Y9 <- ggplot(pikeyear9[pikeyear9$area=="Marine"|pikeyear9$ecotype=="A",], 
+             aes(inc_um,d18O))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 9", y = "d18O", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+Y10 <- ggplot(pikeyear10[pikeyear10$area=="Marine"|pikeyear10$ecotype=="A",], 
+              aes(inc_um,d18O))+
+  geom_point(aes(color = year), size = 0.3)+
+  geom_smooth(method = "lm", size = 0.3)+
+  stat_poly_eq(formula = my.formula, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                size = 0.5, parse = TRUE) +
+  labs(title = "Year 10", y = "d18O", x = "Increment")+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 2),
+        axis.title = element_text(size = 2),
+        plot.title = element_text(size = 2),
+        panel.grid.major = element_line(size = 0.1),
+        panel.grid.minor = element_line(size = 0.1))
+
+P <- ggarrange(Y1, Y2, Y3, Y4, Y5, Y6, Y7, Y8, Y9, Y10, nrow = 5, ncol = 2)
+P
+```
+
+These exploratory steps hint at potential effects that could be worthwhile to analyze further. Both hypotheses can only be answered conclusively by converting the trace elemental data and isotope values into absolute salinity and temperature units in my opinion. Figs. 2 and 3 might already show an outline of a possible way to analyze this, by extracting the slope from each year class increment vs salinity/temperature model and analyzing the slopes with a GAM (Finger et al., 2016) or random slope approach (e.g. Dingemanse et al., 2010), to determine if the effects of thermosaline niche on growth change significantly throughout pike life history. Another promising approach might be to analyze individual growth patterns, extracting growth performance per year for each individual and modelling growth performance with experienced thermal/saline niche using mixed linear models.
+
+# Ecotypes?
+Based on the notion of (visually) different plots (as shown exemplary in figure **X**), I attempted to discern 4 different ecotypes/life strategies from the d18O & Sr data. I aimed at describing a **freshwater resident** (**F**-type, Fig. 4 A), an **anadromous ecotype** (**A**-type, defined as originating from freshwater but migrating into brackish salinities in later life, Fig. 4 B), a **high salinity ecotype** (**S**-type, defined from a high Sr/CA value in the first year and above average Sr-values for the rest of the life,  Fig. 4 D), and an **intermediary ecotype** (**I**-type, defined from a lower Sr/Ca-value in the first years that´s higher than the freshwater value but lower than Bodden average, and a constant increase in Sr/Ca throughout life, Fig. 4 C). Additionally, based on the d18O value in the first year and the lifelong mean d18O, I assigned three temperature types, **warm (W)**, low d18O in first year and lifelong below global average, **intermediary(I)**, close to global mean in first year and lifelong, and **cold (C)**, above global mean in fist year and lifelong.
+```{r ecopic, echo=FALSE, dpi=600, out.width="200%", out.height="200%", fig.cap="Figure 4: Visual ecotypes for pike in the study area. The left plots shows Sr/Ca values during the entire transect from core (birth) to outer margin (point of capture), indicating saline history. The right plots show the d18O values from core to margin, indicating thermal history. A: Freshwater pike, low Sr during the entire life, d18O signature well below global mean during the first year and lifelong, indicating a warm thermal type. B: anadromous pike migrating regularly into freshwater and back into the Bodden. The d18O signature of this pike is below the global mean during the entire life and especially during the first year cycle, indicating a warm thermal type. C: Intermediary saline type, characterized by constant shift towards more saline water during the life history. The d18O signatue is near the gloal mean during the entire life history, indocating an intermediary thermal type. D: High saline ecotype with origin in high Sr and high signal during the entire life, indicating a high salinity ecotype. The d18O signature is above the global mean during the entire life, indicating a cold thermal type."}
+Ecopic_path <- "Figures/Ecotypes.jpg"
+include_graphics(Ecopic_path)
+
+```
+
+Plotting the measured increments on the otoliths for the different ecotypes shows differences in growth performance in Fig. 5, but they do not appear to be significant within most year classes. Significant differences in later years might be caused by low sample size. The freshwater resident fish show relatively high increment widths, a proxy for growth performance in a given year class, throughout their lifes, except for the first year, however, this ecotype class only consists of 7 individuals. A high relative growth performance was found in the intermediary type in the first year, with medium growth for the rest of its life history. The anadromous ecotype shows high variability in increment widths in the first few years, implying effects other than the general life strategy (such as effects of the stream it was born in or the Bodden it grew up in), however, it was apparent that this type shows a high growth performance in the first three years of life and a lower growth performance in later years. The high salinity ecotype shows a relatively low growth performance in the first three years, a medium growth in year four to six and a relatively high growth in the later years. While there seem to be differences in growth, none of them are significant within a year (except for ages older than 7 years, but note that the sample size become small for old fish). Looking at lifelong growth performance at the individual level might reveal more of these trends and allow to separate spatial effects of Bodden and origin tributary from effects of life strategy/ecotype.
+
+```{r ecotypes, echo=FALSE, dpi=600, warning=FALSE, message=FALSE, fig.cap="Figure 5: Increment widths of pike assigned to the four ecotypes during their life history"}
+ggplot(Alldata[Alldata$waterbody!="KD"&Alldata$ecotype!="F",], aes(year, inc_um))+
+  geom_boxplot(aes(color = ecotype), width = 0.5)+
+  labs(title = "Increment widths at age (saline ecotypes)", 
+       y = "increment width (um)", x = "age")+
+  scale_x_discrete(limits = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"))+
+  theme_minimal()
+```
+
+Fig. 6 shows the mean increment widths of pike assigned to three temperature classes, with mean increment width in um on the y-axis and age in years on the x-axis. Addtionally to the ecotypes, which are primarily motivated by the Sr/Ca data, the temperature classes were assigned based on the d18O-signature in the first year and the mean lifelong d18O relative to the global mean of all pike. The three classes **cold (C)**, **intermediate (I)**, and **warm (W)** also showed differences in growth. The cold temperature type showed lower mean increment widths up until the fifth year of life, with the warm type scoring higher growth particularly in the first three years. In later years, the cold and intermediary type show a higher growth than the warm type. However, the d18O data were not cleaned from the effect of d18O water, so effects of different salinity depending on Bodden/tributary of origin can not be excluded.
+
+```{r temptypes, echo=FALSE, dpi=600, warning=FALSE, message=FALSE, fig.cap="Figure 6: Increment width of pike assigned to the three thermal types duing their life history."}
+ggplot(Alldata[Alldata$waterbody!="KD"&Alldata$ecotype!="F",], aes(year, inc_um))+
+  geom_boxplot(aes(color = Temperature), width = 0.5)+
+  labs(title = "Increment widths at age (temp ecotypes)", 
+       y = "increment width (um)", x = "age")+
+  scale_x_discrete(limits = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"))+
+  theme_minimal()
+```
+
+Ecological theory would predict a pike to seek out a cooler thermal niche when occupying a high saline niche. The qualitative ecotypes/temperature classes support that notion. Fig. 7 shows the frequency of qualitative temperature classes per saline ecotype. As one would expect, the anadromous and freshwater ecotype mostly consist of the warm and intermediate temperature types, with a small percentage of cold temperature types in the anadromous ecotype. The intermediary saline ecotype consists of mostly intermediate temperature types. The saline ecotype consists of predominantly cold and intermediary temperature types.
+
+```{r tempeco, echo=FALSE, dpi=600, warning=FALSE, message=FALSE, fig.cap="Figure 7: Frequency of temperature types among salinity ecotypes"}
+ggplot(Alldata[Alldata$waterbody!="KD",], 
+       aes(ecotype, color = Temperature, fill = Temperature))+
+  geom_histogram(stat = "count")+
+  scale_color_brewer("Temperature", palette = 1)+
+  scale_fill_brewer("Temperature", palette = 1)+
+  theme_minimal()
+```
+
+# Looking at clustering
+So, in the manner of all exploratory analyses with ecology in mind, of course I had to calculate a PCA with the data. The group colouring in the two plots below are the assigned ecotypes, but I´ve tried many. As you can see, in the first year (Fig. 8), most of the pike differentiate along the d18O and Sr Eigenvectors, with some variance along Na (which is also a proxy for salinity if I remember correctly) and Mg (which strongly correlates with Sr in aragonite). In later years (Fig. 9, I´ve chosen year 5, as this seems to be the year after which the effect of salinity reverses, see above), there´s quite some variance in the data, and the intermediary, high saline and anadromous fish form one big "cloud", showing that the visual ecotypes might not be the best way to characterize them. However, I´ve also tried to colour them with their respective waterbody of origin in Fig. 10 (or, more precisely, the waterbody they´ve been captured in, we know how far those fish can and will move sometimes). There might be some potential for geolocation of fish based on elemental fingerprints in this data, but since this will not be the main focus of my second chapter, I´ve kept this analysis short and didn´t dive too deep into it just yet.
+
+```{r PCA1, echo=FALSE, dpi=600, warning=FALSE, message=FALSE, fig.cap="Figure 8: PCA-biplot showing the PCA for first year pike ordered according to the first two principal components. Colored arrows show the Eigenvectors of the respective elemental data, different colors in the data points show visually assigned ecotypes"}
+#script for PCA
+
+# as matrix, only data columns
+#pikeyear1all <- na.omit(pikeyear1all)
+
+pikeyear1$d18O <- sqrt(pikeyear1$d18O^2)
+pikemat1 <- as.matrix(pikeyear1[,16:21])
+pikemat1 <- scale(pikemat1)
+
+# pikeyear2$d18O <- sqrt(pikeyear2$d18O^2)
+# pikemat2 <- as.matrix(pikeyear2[,16:21])
+# pikemat2 <- scale(pikemat2)
+# 
+# pikeyear3$d18O <- sqrt(pikeyear3$d18O^2)
+# pikemat3 <- as.matrix(pikeyear3[,16:21])
+# pikemat3 <- scale(pikemat3)
+# 
+# pikeyear4$d18O <- sqrt(pikeyear4$d18O^2)
+# pikemat4 <- as.matrix(pikeyear4[,16:21])
+# pikemat4 <- scale(pikemat4)
+# 
+# pikeyear5$d18O <- sqrt(pikeyear5$d18O^2)
+# pikemat5 <- as.matrix(pikeyear5[,16:21])
+# pikemat5 <- scale(pikemat5)
+# 
+# pikeyear6$d18O <- sqrt(pikeyear6$d18O^2)
+# pikemat6 <- as.matrix(pikeyear6[,16:21])
+# pikemat6 <- scale(pikemat6)
+# 
+# pikeyear7$d18O <- sqrt(pikeyear7$d18O^2)
+# pikemat7 <- as.matrix(pikeyear7[,16:21])
+# pikemat7 <- scale(pikemat7)
+# 
+# pikeyear8$d18O <- sqrt(pikeyear8$d18O^2)
+# pikemat8 <- as.matrix(pikeyear8[,16:21])
+# pikemat8 <- scale(pikemat8)
+# 
+# pikeyear9$d18O <- sqrt(pikeyear9$d18O^2)
+# pikemat9 <- as.matrix(pikeyear9[,16:21])
+# pikemat9 <- scale(pikemat9)
+# 
+# pikeyear10$d18O <- sqrt(pikeyear10$d18O^2)
+# pikemat10 <- as.matrix(pikeyear10[,16:21])
+# pikemat10 <- scale(pikemat10)pikeyear2$d18O <- sqrt(pikeyear2$d18O^2)
+# pikemat2 <- as.matrix(pikeyear2[,16:21])
+# pikemat2 <- scale(pikemat2)
+# 
+# pikeyear3$d18O <- sqrt(pikeyear3$d18O^2)
+# pikemat3 <- as.matrix(pikeyear3[,16:21])
+# pikemat3 <- scale(pikemat3)
+# 
+# pikeyear4$d18O <- sqrt(pikeyear4$d18O^2)
+# pikemat4 <- as.matrix(pikeyear4[,16:21])
+# pikemat4 <- scale(pikemat4)
+# 
+pikeyear5$d18O <- sqrt(pikeyear5$d18O^2)
+pikemat5 <- as.matrix(pikeyear5[,16:21])
+pikemat5 <- scale(pikemat5)
+# 
+# pikeyear6$d18O <- sqrt(pikeyear6$d18O^2)
+# pikemat6 <- as.matrix(pikeyear6[,16:21])
+# pikemat6 <- scale(pikemat6)
+# 
+# pikeyear7$d18O <- sqrt(pikeyear7$d18O^2)
+# pikemat7 <- as.matrix(pikeyear7[,16:21])
+# pikemat7 <- scale(pikemat7)
+# 
+# pikeyear8$d18O <- sqrt(pikeyear8$d18O^2)
+# pikemat8 <- as.matrix(pikeyear8[,16:21])
+# pikemat8 <- scale(pikemat8)
+# 
+# pikeyear9$d18O <- sqrt(pikeyear9$d18O^2)
+# pikemat9 <- as.matrix(pikeyear9[,16:21])
+# pikemat9 <- scale(pikemat9)
+# 
+# pikeyear10$d18O <- sqrt(pikeyear10$d18O^2)
+# pikemat10 <- as.matrix(pikeyear10[,16:21])
+# pikemat10 <- scale(pikemat10)
+
+#PCA visualization
+#Compute PCA for all values
+pike_pca1 <- prcomp(pikemat1, scale = TRUE)
+# pike_pca2 <- prcomp(pikemat2, scale = TRUE)
+# pike_pca3 <- prcomp(pikemat3, scale = TRUE)
+# pike_pca4 <- prcomp(pikemat4, scale = TRUE)
+pike_pca5 <- prcomp(pikemat5, scale = TRUE)
+# pike_pca6 <- prcomp(pikemat6, scale = TRUE)
+# pike_pca7 <- prcomp(pikemat7, scale = TRUE)
+# pike_pca8 <- prcomp(na.omit(pikemat8), scale = TRUE)
+# pike_pca9 <- prcomp(pikemat9, scale = TRUE)
+# pike_pca10 <- prcomp(pikemat10, scale = TRUE)
+#Eigenvalue plot
+#fviz_eig(pike_pca)
+
+#PCA visual for indviduals
+groups1 <- as.factor(pikeyear1$ecotype)
+# groups2 <- as.factor(na.omit(pikeyear2$waterbody))
+# groups3 <- as.factor(pikeyear3$waterbody)
+# groups4 <- as.factor(pikeyear4$waterbody)
+groups5 <- as.factor(pikeyear5$ecotype)
+groups5.1 <- as.factor(pikeyear5$waterbody)
+# groups6 <- as.factor(pikeyear6$waterbody)
+# groups7 <- as.factor(pikeyear7$waterbody)
+# groups8 <- as.factor(pikeyear8$waterbody)
+# groups9 <- as.factor(pikeyear9$waterbody)
+# groups10 <- as.factor(pikeyear10$waterbody)
+
+# fviz(pike_pca1, "ind", color = groups1)
+# fviz(pike_pca2, "ind", color = groups2)
+# fviz(pike_pca3, "ind", color = groups3)
+# fviz(pike_pca4, "ind", color = groups4)
+# fviz(pike_pca5, "ind", color = groups5)
+# fviz(pike_pca6, "ind", color = groups6)
+# fviz(pike_pca7, "ind", color = groups7)
+# fviz(pike_pca8, "ind", color = groups8)
+# fviz(pike_pca9, "ind", color = groups9)
+# fviz(pike_pca10, "ind", color = groups10)
+
+#PCA visual for variables
+#fviz_pca_var(pike_pca, col.var = "contrib", #color by contribution
+             #gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07")) #avoids text overlapping
+
+#Individuals and variables
+fviz_pca_biplot(pike_pca1,
+                col.var = "#2E9FDF", # Variables color
+                col.ind = groups1, pointsize = 5)+  # Individuals color
+  labs(x = "PC1", y = "PC2")+  
+  theme(axis.text = element_text(size = 50),
+        axis.title = element_text(size = 50),
+        legend.text = element_text(size = 50),
+        legend.title = element_text(size = 50),
+        )
+
+```
+```{r PCA2, echo=FALSE, dpi=600, warning=FALSE, message=FALSE, fig.cap="Figure 9: PCA-biplot showing the PCA for fifth year pike ordered according to the first two principal components. Colored arrows show the Eigenvectors of the respective elemental data, different colors in the data points show visually assigned ecotypes"}
+fviz_pca_biplot(pike_pca5,
+                col.var = "#2E9FDF",
+                col.ind = groups5)+
+  labs(title = "B", x = "PC1", y = "PC2")
+```
+```{r PCA3, echo=FALSE, dpi=600, warning=FALSE, message=FALSE, fig.cap="Figure 10: PCA-biplot showing the PCA for fifth year pike ordered according to the first two principal components. Colored arrows show the Eigenvectors of the respective elemental data, different colors in the data points show waterbody of capture of individual pike"}
+fviz_pca_biplot(pike_pca5,
+                col.var = "#2E9FDF",
+                col.ind = groups5.1)+
+  labs(title = "C", x = "PC1", y = "PC2")
+
+#Eigenvalues
+# eig.val <- get_eigenvalue(pike_pca)
+# eig.val
+# 
+# #Results for variables
+# res.var <- get_pca_var(pike_pca)
+# res.var$coord                 #coordinates
+# res.var$contrib               #contribution to PCs
+# res.var$cos2                  #Quality of representation
+
+#Same for individuals
+# res.ind <- get_pca_ind(pike_pca)
+# res.ind$coord          # Coordinates
+# res.ind$contrib        # Contributions to the PCs
+# res.ind$cos2           # Quality of representation 
+
+
+
+```
+I also attempted to form discrete clusters. From Fig. 11 below you can see that having four clusters seems to be a good compromise between reducing within group sum of squares and keeping complexity low. These four clusters are shown in Fig. 12. Assigning the clusters to the Sr and d18O Biplot in Fig. 13 yields some insights. There seem to be two distinct freshwater cluster (clusters 3 and 4), whereas the two clusters 1 and 2 seem to be predominantly Bodden clusters. The anadromous fish are all over the place and present in all clusters, showing again that this characterization could use some tweaking. If you have any ideas on how to improve on this, please let me know.
+```{r clusters1, dpi=600, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="Figure 11: Plot of within groups sum of squares depending on number of clusters used"}
+# K-Means Cluster Analysis
+mydata1 <- na.omit(Alldata)
+mydata2 <- scale(mydata1[,16:21])
+
+# Determine number of clusters
+wss <- (nrow(mydata2)-1)*sum(apply(mydata2,2,var))
+for (i in 2:15) wss[i] <- sum(kmeans(mydata2,
+   centers=i)$withinss)
+plot(1:15, wss, type="b", xlab="Number of Clusters",
+  ylab="Within groups sum of squares")
+
+fit <- kmeans(mydata2, 4)
+# get cluster means
+#aggregate(mydata2,by=list(fit$cluster),FUN=mean)
+
+# append cluster assignment
+mydata3 <- data.frame(mydata1, fit$cluster, mydata1$waterbody)
+```
+```{r clusters2, dpi=600, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="Figure 12: Clusterplot of the 4 k-means clusters formed according to number of clusters promising least sum of squares and lowest complexity"}
+clusplot(mydata2, fit$cluster, color=TRUE, shade=TRUE,
+   labels=1, lines=0)
+```
+```{r clusters3, dpi=600, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="Figure 13: Biplot of d18O and Sr/Ca values (all pike, all years) showing the life history strategy (anadromous in red, marine in blue and Freshwater in green) along with the assigned cluster (1-4, different shapes) based on k-means clustering."}
+png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Geschwafel/Lab-meeting-11-07-22/PCA.jpg", width = 1200, height = 800)
+ggplot(mydata3, aes(d18O, Sr, shape = as.factor(fit.cluster), color = area))+
+  geom_point(size=5)+
+  labs(shape = "assigned cluster")+
+  theme_minimal()+
+    theme(axis.text = element_text(size = 25),
+        axis.title = element_text(size = 25),
+        legend.text = element_text(size = 25),
+        legend.title = element_text(size = 25))
+dev.off()
+```
+

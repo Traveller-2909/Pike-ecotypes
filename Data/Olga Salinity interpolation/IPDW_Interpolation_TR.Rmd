@@ -1,0 +1,216 @@
+---
+title: "Salinity interpolation Bodden"
+author: "TR"
+date: "17 3 2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r required packages, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(sp)
+library(rgdal)
+library(purrr)
+library(compensateR)
+library(lubridate)
+library(measurements)
+library(ipdw)
+library(geoR)
+library(spatstat)
+library(gdata)
+library(rgeos)
+library(sf)
+library(rspatial)
+library(dismo)
+library(gstat)
+```
+
+```{r ipdw loop, include=FALSE}
+#r code to perform an inverse path distance weighted interpolation of salinity using a costraster generating high interpolation travel cost over land and low travel cost in water
+
+rm(list = ls())
+
+#load in data from LUNG (added yearly means at points of missing data)
+LUNGdata <- read.delim(file = "Data/LUNGdata_complete.txt", sep = "\t", header = T, stringsAsFactors = F)
+
+#load BH-data
+Samplingdata <- read.delim(file = "Data/Samp_Inst_months.txt", sep = "\t", header = T, stringsAsFactors = F)
+
+#load Logger data
+Loggerdata <- read.delim(file = "Data/Logger_month_means.txt", sep = "\t", header = T, stringsAsFactors = F)
+
+#Bring all into same format, LUNG data
+LUNGdata <- LUNGdata%>%
+  transmute(name = name,
+            id = id,
+            waterbody = waterbody,
+            month = month,
+            year = year,
+            identifier = paste0(month, "_", year),
+            Lat = Lat,
+            Long = Long,
+            type = type,
+            SAL = SAL)
+
+#BH sampling
+Samplingdata <- Samplingdata%>%
+  transmute(name = name,
+            id = id,
+            waterbody = waterbody,
+            month = month,
+            year = year,
+            identifier = paste0(month, "_", year),
+            Lat = Lat,
+            Long = Long,
+            type = type,
+            SAL = SAL)
+
+#Logger
+Loggerdata <- Loggerdata%>%
+  transmute(name = name,
+            id = id,
+            waterbody = waterbody,
+            month = month,
+            year = year,
+            identifier = identifier,
+            Lat = Lat,
+            Long = Long,
+            type = type,
+            SAL = SAL)
+
+#Join & filter out feshwater
+Saldata <- rbind(LUNGdata, Samplingdata, Loggerdata)
+Saldata <- Saldata%>%filter(type == "Coast" & year == 2020|year == 2021)
+
+#load in receiver for later checking accessibility of rasterstack
+Rec <- read.csv2("Data/Rec-Arrays_ALL.csv", header = T, 
+                 stringsAsFactors = F, sep = ",")
+Rec$Longitude <- as.numeric(Rec$Longitude)
+Rec$Latitude <- as.numeric(Rec$Latitude)
+rec_xy <- Rec[,1:2]
+rec_sp <- SpatialPointsDataFrame(coords = rec_xy, data = Rec, 
+                                        proj4string = CRS("+init=epsg:4326"))
+rec_sp <- spTransform(rec_sp, CRS("+proj=utm +zone=33 +ellps=GRS80 
+                                  +units=m +no_defs"))
+
+#load in land layer
+Land <- readOGR("Data/Rügen_landcover_simplified_1Pol.gpkg")
+#transform to UTM (convert from dec. degrees to meters)
+Land <- spTransform(Land, CRS("+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs"))
+            
+#Define empty rasters to fill with data, an empty object for the validation #data, and a vector to loop along
+monthID <- unique(Saldata$identifier)
+yras <- stack()
+mras <- stack()
+validation <- NULL
+
+for (i in 1:length(monthID)) {
+    #select data (month & year through identifier)
+    df <- Saldata[which(Saldata$identifier == monthID[i]),]
+    
+    #generate coordinates, make sure format is Long-Lat
+    xy <- df[,c(8,7)]
+    
+    #convert to spatial points
+    pnts <- SpatialPointsDataFrame(coords = xy, data = df,
+                                   proj4string = CRS("+init=epsg:4326"))
+    pnts <- spTransform(pnts, CRS("+proj=utm +zone=33 +ellps=GRS80 
+                                           +units=m +no_defs"))
+    
+    #generate costraster, resolution in m
+    costras <- costrasterGen(pnts, Land, extent = "polys", 
+                             resolution = c(500, 500),
+                             projstr = projection(Land))
+    
+    #mean neighbor distance
+    W <- owin(range(coordinates(pnts)[,1]), range(coordinates(pnts)[,2]))
+    kat.pp <- ppp(coordinates(pnts)[,1], coordinates(pnts)[,2], window = W)
+    mean.neighdist <- mean(nndist(kat.pp))
+    
+    #build grid
+    gridsize <- mean.neighdist*2
+    grainscale.fac <- gridsize/res(costras)[1]
+    gridras <- aggregate(costras, fact = grainscale.fac)
+    gridpol <- rasterToPolygons(gridras)
+    gridpol$value <- row.names(gridpol)
+    
+    #spatial join
+    fulldataset.over <- over(pnts, gridpol)
+    fulldataset.over <- cbind(data.frame(fulldataset.over), 
+                          setNames(data.frame(pnts), c("name", "id",
+                                                       "waterbody","month",
+                                                       "year","identifier",
+                                                       "Lat", "Long", "type",
+                                                       "SAL","x.utm","y.utm")))
+    #grid selection
+    set.seed(2)
+    gridlev <- unique(fulldataset.over$value)
+    #split in training & validation data sets
+    for (i in seq_along(gridlev)) {
+      activesub <- subset(fulldataset.over, fulldataset.over$value
+                          ==gridlev[i])
+      selectnum <- gdata::resample(seq_len(nrow(activesub)), 1)
+      if(i == 1){
+        training <- activesub[selectnum,]
+        }
+      else{
+        training <- rbind(training, activesub[selectnum,])
+      }
+    }
+    
+    #save training & validation data frames as spatial points data frame
+    validate <- fulldataset.over[!(row.names(fulldataset.over)%in%
+                                 row.names(training)),]
+    xyu <- cbind(training$x.utm, training$y.utm)
+    training <- SpatialPointsDataFrame(xyu, training)
+    xyu <- cbind(validate$x.utm, validate$y.utm)
+    validate <- SpatialPointsDataFrame(xyu, validate)
+    
+    #ipdw calculations require projected data, make sure projections match
+    projection(training) <- projection(pnts)
+    projection(validate) <- projection(pnts)
+    paramlist <- c("SAL")
+    
+    #perform ipdw, set name to month & year
+    ipdw <- ipdw(training, costras, range = mean.neighdist*10, 
+                       paramlist, overlapped = T)
+    ipdw <- setNames(ipdw[[1]], paste(unique(df$year), "Month",
+                                      unique(df$month)))
+    
+    #error estimation, generate data frame containing measured & interpolated
+    measured.spdf <- data.frame(validate@data[12:14])
+    coordinates(measured.spdf) <- coordinates(validate)
+    
+    #claculate simple measurement error metrics, name after year & month
+    valid.ipdw <- errorGen(ipdw, measured.spdf, measured.spdf@data)
+    valid.ipdw$id <- paste(unique(df$year),"Month", unique(df$month))
+    
+    #save measurement errors in list
+    validation <- c(validation, valid.ipdw)
+    #save interpolations into rasterstack
+    yras <- stack(yras, ipdw)
+}
+
+#example for simple error comparison between prediction & measured
+valid <- lm(validation[[2]]$SAL ~ validation[[2]]$predicted)
+summary(valid)#adjusted r2 0.66, so not super bad... ;)
+
+#This extracts salinity values from around the receivers and forms a mean
+#of the buffer zone around the receiver position
+rec_sp@data$Jan_20 <- raster::extract(yras$X2020.Month.1, rec_sp, 
+                                           buffer = 1500, small = T,
+                                           fun = mean, na.rm = T)
+
+
+yras[which(names(yras)==monthID[i]),]
+
+#if you want to check interpolations visually, run this:
+print(spplot(yras, layout=c(1, 1)))
+
+#save data:
+save(yras, validation, file = "Data/IPDW_results.RData")
+```
