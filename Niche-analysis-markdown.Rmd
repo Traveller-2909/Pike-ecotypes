@@ -2052,11 +2052,11 @@ ggplot(fishassign_O[fishassign_O$area=="WRB",], aes(area, fill=clust_O))+
   labs(x="", y="proportion", fill="assigned cluster")+
   scale_fill_manual(breaks=c("Low saline|shift temp","Int saline|cold temp",
                              "High saline|constant temp"), values = mypallette)+
-  theme(axis.text.y = element_text(size = 25),
+  theme(axis.text.y = element_text(size = 10),
         axis.text.x = element_blank(),
-        axis.title = element_text(size = 25),
-        legend.text = element_text(size = 25),
-        legend.title = element_text(size = 25),
+        axis.title = element_text(size = 10),
+        legend.text = element_text(size = 10),
+        legend.title = element_text(size = 10),
         legend.position = "top")
 dev.off()
 
