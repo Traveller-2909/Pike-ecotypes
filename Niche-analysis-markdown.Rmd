@@ -1943,135 +1943,202 @@ ggplot(fishassign_FSr, aes(capt, fill=clust))+
 save(Bclust_Sr,Bclust_Sr_k,Fclust_Sr,Fclust_Sr_k, fishassign_Sr,fishassign_FSr, file=paste0("Data/Otoliths/", yearindex, "_dtw-clusters_cluster-based.RData"))
 ```
 
-```{r hdtw low-res d18O clustering, include=FALSE}
+```{r hdtw low-res d18O/Sr clustering, include=FALSE}
 rm(list = ls())
 #read in data
 load("Data/Otoliths/Adults_element_transects.RData")
 
-Bclust_lowres <- Bclust_lowres%>%filter(ID!="BH-01908")%>%filter(age>=3, year<4)
+Bclust_lowres <- Bclust_lowres%>%filter(ID!="BH-01908")%>%filter(age>=2, year<3)
+Fclust_lowres <- Fclust_lowres%>%filter(age>=2, year<3)
 
 Bclust_lowres$area <- ifelse(Bclust_lowres$area=="Marine", "GB", Bclust_lowres$area)
 
-length(unique(Bclust_lowres$ID))
-length(unique(Bclust_lowres[Bclust_lowres$area=="GB",]$ID))
+# length(unique(Bclust_lowres$ID))
+# length(unique(Bclust_lowres[Bclust_lowres$area=="GB",]$ID))
 
 summary(count(Bclust_lowres, "ID"))
+summary(count(Fclust_lowres, "ID"))
 
-#mean of 33.77, standard length 40 cells
-
-center_scale <- function(x){
-  scale(x, scale = F)
-}
+# center_scale <- function(x){
+#   scale(x, scale = F)
+# }
 
 #reinterpolate to standard length
-data <- interpol(series = Bclust_lowres, length = 35, element = "Sr")
-data2 <- interpol(series = Bclust_lowres, length = 35, element = "d18O_res")
+dataB1 <- interpol(series = Bclust_lowres, length = 30, element = "Sr")
+dataB2 <- interpol(series = Bclust_lowres, length = 30, element = "d18O_res")
 
-data <- cbind(data, data2[,2])
+dataF1 <- interpol(series = Fclust_lowres, length = 30, element = "Sr")
+dataF2 <- interpol(series = Fclust_lowres, length = 30, element = "d18O_res")
 
-data[,2] <- scale(data[,2])
+dataB <- cbind(dataB1, dataB2[,2])
+dataF <- cbind(dataF1, dataF2[,2])
 
-colnames(data) <- c("ID", "Sr", "d18O_res")
+dataB[,2] <- scale(dataB[,2])
+dataF[,2] <- scale(dataF[,2])
 
-par(mfrow=c(1,3))
+colnames(dataB) <- c("ID", "Sr", "d18O_res")
+colnames(dataF) <- c("ID", "Sr", "d18O_res")
+
+par(mfrow=c(1,2))
 plot(Bclust_lowres[Bclust_lowres$ID=="BH-90981",]$dist,
      Bclust_lowres[Bclust_lowres$ID=="BH-90981",]$Sr,
-     xlab="distance um", ylab="d18O", type = "l")
-plot(row_number(data[data$ID=="BH-90981",]$ID),
-     data[data$ID=="BH-90981",]$Sr,
+     xlab="distance um", ylab="Sr", type = "l")
+plot(row_number(dataB[dataB$ID=="BH-90981",]$ID),
+     data[dataB$ID=="BH-90981",]$Sr,
+     xlab="cell", ylab="residuals", type="l")
+
+par(mfrow=c(1,2))
+plot(Fclust_lowres[Fclust_lowres$ID=="BH-00411",]$dist,
+     Fclust_lowres[Fclust_lowres$ID=="BH-00411",]$Sr,
+     xlab="distance um", ylab="Sr", type = "l")
+plot(row_number(dataF[dataF$ID=="BH-00411",]$ID),
+     dataF[dataF$ID=="BH-00411",]$Sr,
      xlab="cell", ylab="residuals", type="l")
 
 #make list of matrices
-IDOto <- unique(data$ID)
+IDOto <- unique(dataB$ID)
 
 Bseries_Ores <- list()
 for (i in 1:length(IDOto)) {
-  m <- as.matrix(data[which(data$ID==IDOto[i]),c(2,3)])
+  m <- as.matrix(dataB[which(dataB$ID==IDOto[i]),c(2,3)])
   Bseries_Ores[[length(Bseries_Ores)+1]] <- m
 }
 
 names(Bseries_Ores) <- c(IDOto)
 
-#cluster that shit
-Oclust <- tsclust(series = Bseries_Ores, type = "hierarchical",
-                  control = hierarchical_control(method = "ward.D"),
-                  centroid = dba,
-                  seed = 390,args = tsclust_args(dist = list(window.size =5L)))
+IDOto <- unique(dataF$ID)
 
-plot(Oclust)
+Fseries_Ores <- list()
+for (i in 1:length(IDOto)) {
+  m <- as.matrix(dataF[which(dataF$ID==IDOto[i]),c(2,3)])
+  Fseries_Ores[[length(Fseries_Ores)+1]] <- m
+}
 
- #cluster again with cutoff
-Oclust_k <- tsclust(series = Bseries_Ores, type = "hierarchical",
+names(Fseries_Ores) <- c(IDOto)
+
+#cluster Bodden with cutoff test
+Oclust_B <- tsclust(series = Bseries_Ores, type = "hierarchical",
                   k = 3L:6L,centroid = dba,
                   control = hierarchical_control(method = "ward.D"),
                   seed = 94L,args = tsclust_args(dist = list(window.size =5L)))
 
-names(Oclust_k) <- paste0("k_",3L:6L)
+names(Oclust_B) <- paste0("k_",3L:6L)
 
-sapply(Oclust_k, cvi, type = "internal")
+sapply(Oclust_B, cvi, type = "internal")
 
-plot(Oclust_k$k_3, type="series", linetype="solid")+
-  ylim(-3,4)+
-  labs(x="transect cell", y="value")+
-  theme(axis.text = element_text(size = 25),
-        axis.title = element_text(size = 25),
-        plot.title = element_text(size = 25))
+#cluster FW with cutoff test
+Oclust_F <- tsclust(series = Fseries_Ores, type = "hierarchical",
+                  k = 3L:6L,centroid = dba,
+                  control = hierarchical_control(method = "ward.D"),
+                  seed = 96L,args = tsclust_args(dist = list(window.size =5L)))
 
-png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Chapter 2/Stats/Niche analysis/Figures/Year_3_Sr_d18O_centroids.jpg", width = 2400, height = 800)
-plot(Oclust_k$k_3, type="centroid", linetype="solid", cex=1)+
+names(Oclust_F) <- paste0("k_",3L:6L)
+
+sapply(Oclust_F, cvi, type = "internal")
+
+#Plot best solution
+# png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Chapter 2/Stats/Niche analysis/Figures/Year_3_Sr_d18O_centroids.jpg", width = 2400, height = 800)
+plot(Oclust_B$k_3, type="centroid", linetype="solid", cex=1)+
   ylim(-2.5,2)+ggtitle(expression("Sr/"~delta^18~O~"cluster centroids"))+
   labs(x="transect cell", y="scaled value")+
   theme(axis.text = element_text(size = 25, color="black"),
         axis.title = element_text(size = 25),
         plot.title = element_text(size = 25, hjust = 0.5))
-dev.off()
+#dev.off()
+
+plot(Oclust_F$k_3, type="centroid", linetype="solid", cex=1)+
+  ylim(-2.5,2)+ggtitle(expression("Sr/"~delta^18~O~"cluster centroids"))+
+  labs(x="transect cell", y="scaled value")+
+  theme(axis.text = element_text(size = 25, color="black"),
+        axis.title = element_text(size = 25),
+        plot.title = element_text(size = 25, hjust = 0.5))
 
 #assign clusters to fish
-fishassign_O <- data.frame(ID=names(Bseries_Ores), 
+fishassign_B <- data.frame(ID=names(Bseries_Ores), 
                             clust_O=factor(Oclust_k$k_3@cluster, 
                                            levels = c(1:3), 
-                                           labels = c("High saline|constant temp",
+                                           labels = c("Int saline|Int temp",
                                                       "Low saline|shift temp",
-                                                      "Int saline|cold temp")))
-
-fishassign_O <- Bclust_lowres%>%
+                                                      "High saline|const temp")))
+fishassign_F <- data.frame(ID=names(Fseries_Ores), 
+                            clust_O=factor(Oclust_F$k_3@cluster, 
+                                           levels = c(1:3), 
+                                           labels = c("Int FW|const temp",
+                                                      "Anadromous|shift temp",
+                                                      "Low FW|cold temp")))
+#Join with data
+fishassign_B <- Bclust_lowres%>%
   group_by(ID)%>%
   transmute(ID=ID,
             capt=capt,
             area=area)%>%
   distinct()%>%
-  inner_join(fishassign_O, by="ID")%>%
-  mutate(clust_O=fct_relevel(clust_O, "Low saline|shift temp",
-                             "Int saline|cold temp","High saline|constant temp"))
+  inner_join(fishassign_B, by="ID")%>%
+  mutate(clust_O=fct_relevel(clust_O,
+                             "Low saline|shift temp",
+                             "Int saline|Int temp",
+                             "High saline|const temp"))
+
+fishassign_F <- Fclust_lowres%>%
+  group_by(ID)%>%
+  transmute(ID=ID,
+            capt=capt,
+            area=area)%>%
+  distinct()%>%
+  inner_join(fishassign_F, by="ID")%>%
+  mutate(clust_O=fct_relevel(clust_O,
+                             "Low FW|cold temp",
+                             "Int FW|const temp",
+                             "Anadromous|shift temp"))
 
 mypallette <- viridis::viridis(3, direction = -1)
 
-png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Chapter 2/Stats/Niche analysis/Figures/Clusterassign_WRB.jpg", width = 1200, height = 800)
-ggplot(fishassign_O[fishassign_O$area=="WRB",], aes(area, fill=clust_O))+
+#Plot Bodden proportions
+# png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Chapter 2/Stats/Niche analysis/Figures/Clusterassign_WRB.jpg", width = 1200, height = 800)
+ggplot(fishassign_F, aes(capt, fill=clust_O))+
   geom_bar(position = "fill", width = .5)+theme_minimal()+
   labs(x="", y="proportion", fill="assigned cluster")+
-  scale_fill_manual(breaks=c("Low saline|shift temp","Int saline|cold temp",
-                             "High saline|constant temp"), values = mypallette)+
-  theme(axis.text.y = element_text(size = 30),
-        axis.text.x = element_blank(),
-        axis.title = element_text(size = 30),
-        legend.text = element_text(size = 30),
-        legend.title = element_text(size = 30),
-        legend.position = "top")
-dev.off()
+  scale_fill_manual(breaks=c("Low FW|cold temp",
+                             "Int FW|const temp",
+                             "Anadromous|shift temp"), 
+                    values = mypallette)+
+  theme(axis.text.y = element_text(size = 25, color = "black"),
+        axis.text.x = element_text(size = 25, color = "black"),
+        axis.title = element_text(size = 25),
+        legend.text = element_text(size = 25),
+        legend.title = element_text(size = 25),
+        legend.position = "right")
+#dev.off()
 
-write.table(fishassign_O, file = "Data/otoliths/Year_3_clusters.txt", row.names = F,
+#Plot FW proportions
+ggplot(fishassign_F, aes(capt, fill=clust_O))+
+  geom_bar(position = "fill", width = .5)+theme_minimal()+
+  labs(x="", y="proportion", fill="assigned cluster")+
+  scale_fill_manual(breaks=c("Low saline|shift temp",
+                             "Int saline|Int temp",
+                             "High saline|const temp"), 
+                    values = mypallette)+
+  theme(axis.text.y = element_text(size = 25, color = "black"),
+        axis.text.x = element_text(size = 25, color = "black"),
+        axis.title = element_text(size = 25),
+        legend.text = element_text(size = 25),
+        legend.title = element_text(size = 25),
+        legend.position = "right")
+
+write.table(fishassign_B, file = "Data/otoliths/Year_2_clusters.txt", row.names = F,
+            dec = ".", sep = "\t")
+write.table(fishassign_F, file = "Data/otoliths/Year_2_clusters.txt", row.names = F,
             dec = ".", sep = "\t")
 
-ggarrange(WRB,NRB,GB,FW, nrow = 1, labels = c("WRB","NRB","GB","FW"), legend.grob = get_legend(NRB))
+# ggarrange(WRB,NRB,GB,FW, nrow = 1, labels = c("WRB","NRB","GB","FW"), legend.grob = get_legend(NRB))
 
-fishtest <- fishassign_O%>%
-  transmute(ID=ID,
-            clust_O1=clust_O)%>%
-  inner_join(fishassign_O2, by="ID")%>%
-  transmute(ID=ID,
-            clust_O1=clust_O1,
-            clust_O2=clust_O)
+# fishtest <- fishassign_O%>%
+#   transmute(ID=ID,
+#             clust_O1=clust_O)%>%
+#   inner_join(fishassign_O2, by="ID")%>%
+#   transmute(ID=ID,
+#             clust_O1=clust_O1,
+#             clust_O2=clust_O)
 ```
 
 ```{r mean d18O of clusters}
