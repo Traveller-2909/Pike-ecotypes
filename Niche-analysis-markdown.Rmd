@@ -1984,7 +1984,7 @@ plot(Bclust_lowres[Bclust_lowres$ID=="BH-90981",]$dist,
      Bclust_lowres[Bclust_lowres$ID=="BH-90981",]$Sr,
      xlab="distance um", ylab="Sr", type = "l")
 plot(row_number(dataB[dataB$ID=="BH-90981",]$ID),
-     data[dataB$ID=="BH-90981",]$Sr,
+     dataB[dataB$ID=="BH-90981",]$Sr,
      xlab="cell", ylab="residuals", type="l")
 
 par(mfrow=c(1,2))
@@ -2055,7 +2055,7 @@ plot(Oclust_F$k_3, type="centroid", linetype="solid", cex=1)+
 
 #assign clusters to fish
 fishassign_B <- data.frame(ID=names(Bseries_Ores), 
-                            clust_O=factor(Oclust_k$k_3@cluster, 
+                            clust_O=factor(Oclust_B$k_3@cluster, 
                                            levels = c(1:3), 
                                            labels = c("Int saline|Int temp",
                                                       "Low saline|shift temp",
@@ -2125,9 +2125,9 @@ ggplot(fishassign_F, aes(capt, fill=clust_O))+
         legend.title = element_text(size = 25),
         legend.position = "right")
 
-write.table(fishassign_B, file = "Data/otoliths/Year_2_clusters.txt", row.names = F,
+write.table(fishassign_B, file = "Data/otoliths/Year_2_Bclusters.txt", row.names = F,
             dec = ".", sep = "\t")
-write.table(fishassign_F, file = "Data/otoliths/Year_2_clusters.txt", row.names = F,
+write.table(fishassign_F, file = "Data/otoliths/Year_2_Fclusters.txt", row.names = F,
             dec = ".", sep = "\t")
 
 # ggarrange(WRB,NRB,GB,FW, nrow = 1, labels = c("WRB","NRB","GB","FW"), legend.grob = get_legend(NRB))
@@ -2230,9 +2230,6 @@ dev.off()
 
 rm(list = ls())
 
-#get clustering results
-load("Data/Otoliths/dtw-clusters_cluster-based.RData")
-
 #read in pike data
 fishdata <- read.delim("Data/Scales_Oto_data.txt", sep = "\t", dec = ".", 
                        header = T, stringsAsFactors = F)
@@ -2306,47 +2303,48 @@ pike_inc <- read.delim(file = "Data/Otoliths/Oto_increment_data_with_rad",
 #load("Data/Otoliths/dtw-clusters_cluster-based.RData")
 
 
-year3 <- read.delim("Data/otoliths/Year_3_clusters.txt", header = T, sep = "\t",
-                    dec = ".", stringsAsFactors = F)
+#get clustering results
+fishassign_B <- read.delim(file = "Data/otoliths/Year_2_Bclusters.txt", 
+                           header = T, stringsAsFactors = F, dec = ".", sep = "\t")
+fishassign_F <- read.delim(file = "Data/otoliths/Year_2_Fclusters.txt", 
+                           header = T, stringsAsFactors = F, dec = ".", sep = "\t")
+fishassign_B$mclust <- factor(rep(1,67), levels = 1, labels = "Marine")
+fishassign_F$mclust <- factor(rep(2,17), levels = 2, labels = "FW")
+
+allpike <- rbind(fishassign_B, fishassign_F)
 
 #join increment data with clustering results
-pikedat_B <- year3%>%
+pikedat <- allpike%>%
   transmute(ID=ID,
             capt=capt,
             area=area,
-            clust=clust_O)%>%
+            clust=clust_O,
+            mclust=mclust)%>%
   inner_join(pike_inc, by = "ID")
 
-pikedat_B$i <- as.factor(as.numeric(pikedat_B$i))
+pikedat$i <- as.factor(as.numeric(pikedat$i))
 
 mypallette <- viridis::viridis(3, direction = -1)
 
-png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Chapter 2/Stats/Niche analysis/Figures/Growth_cluster_year3.jpg", width = 1200, height = 800)
-ggplot(pikedat_B[pikedat_B$i!="edge"&pikedat_B$i!="core",], 
-       aes(i,increment, fill=clust))+
-  scale_x_discrete(limits = c(as.character(c(1:3))),
-                   breaks = c(as.character(c(1:3))))+
+#png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Chapter 2/Stats/Niche analysis/Figures/Growth_cluster_year3.jpg", width = 1200, height = 800)
+ggplot(pikedat[pikedat$i!="edge"&pikedat$i!="core",], 
+       aes(i,rad, fill=clust))+
+  scale_x_discrete(limits = c(as.character(c(1:10))),
+                   breaks = c(as.character(c(1:10))))+
   labs(x="Age (years)", y="otolith increment (\U00B5m)", title = "Cluster-dependent growth",
        fill="Cluster")+
-  scale_fill_manual(breaks = c("Low saline|shift temp","Int saline|cold temp",
-                             "High saline|constant temp"), values = mypallette)+
-  geom_violin()+theme_minimal()+
+  #scale_fill_manual(breaks = c("Low saline|shift temp","Int saline|cold temp",
+                             #"High saline|constant temp"), values = mypallette)+
+  geom_boxplot()+theme_minimal()+
+  scale_fill_viridis_d()+
+  scale_colour_viridis_d(direction = 1)+
   theme(axis.text.y = element_text(size = 25, color = "black"),
         axis.text.x = element_text(size = 25, color = "black"),
         axis.title = element_text(size = 25),
         legend.text = element_text(size = 25),
         legend.title = element_text(size = 25),
         plot.title = element_text(size = 25))
-dev.off()
-
-ggplot(pikedat_B[pikedat_B$i!="edge"&pikedat_B$i!="core",], aes(clust,TL, color=clust))+
-  geom_boxplot()+theme_minimal()
-
-ggplot(pikedat_B[pikedat_B$i!="edge"&pikedat_B$i!="core",], aes(clust,age, color=clust))+
-  geom_boxplot()+theme_minimal()
-
-write.table(pikedat_B, "Data/Otoliths/Growthdata_Bodden-cluster.txt", row.names = F,
-            sep = "\t", dec = ".")
+#dev.off()
 ```
 
 ```{r Freshwater growth, echo=FALSE, warning=FALSE, message=FALSE, dpi=600}
