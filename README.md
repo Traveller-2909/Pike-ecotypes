@@ -1,1 +1,1 @@
-This repo contains code to clean and interpolate environmental data for the brackish lagons around Rügen island, Germany, as well as code to perform cluster analysis on elemental timeseries from toliths of pike to infer thermosaline niche utilization of pike in these lagoons
+This repo contains code to clean and interpolate environmental data for the brackish lagons around Rügen island, Germany, as well as code to perform cluster analysis on elemental timeseries from toliths of pike to infer thermosaline niche utilization of pike in these lagoons.
