@@ -1125,8 +1125,7 @@ Loggerdata <- Loggerdata%>%
 #Join & filter out feshwater
 Saldata <- rbind(LUNGdata, Samplingdata, Loggerdata)
 Saldata <- Saldata%>%filter(type == "Coast" & 
-                              year==2019|year == 2020|year == 2021)%>%
-  filter(month==7)
+                              year==2019|year == 2020|year == 2021)
 
 #load in receiver for later checking accessibility of rasterstack
 Rec <- read.csv2("Data/Rec-Arrays_ALL.csv", header = T, 
@@ -1165,7 +1164,7 @@ for (i in 1:length(monthID)) {
     
     #generate costraster, resolution in m
     costras <- costrasterGen(pnts, Land, extent = "polys", 
-                             resolution = c(250, 250),
+                             resolution = c(500, 500),
                              projstr = projection(Land))
     
     #mean neighbor distance
@@ -1216,7 +1215,7 @@ for (i in 1:length(monthID)) {
     #ipdw calculations require projected data, make sure projections match
     projection(training) <- projection(pnts)
     projection(validate) <- projection(pnts)
-    paramlist <- c("WT")
+    paramlist <- c("SAL")
     
     #perform ipdw, set name to month & year
     ipdw <- ipdw(training, costras, range = mean.neighdist*10, 
@@ -1243,14 +1242,13 @@ valid <- lm(validation[[11]]$SAL ~ validation[[11]]$predicted)
 summary(valid)
 
 #This extracts salinity values from around the receivers and forms a mean
-monthID <- unique(yras)
-for (i in 1:length(month)) {
-  
-}
+
 raster::extract(yras, rec_sp, buffer = 500, small = T, fun = mean, na.rm = T)
 
+salras <- tras
+
 #save to RData
-save(yras, validation, file = "Data/IPDW_results.RData")
+save(salras, validation, file = "Data/IPDW_results.RData")
 load("Data/Olga Salinity interpolation/Data/IPDW_results.RData")
 
 meanRast2 <- calc(tras, fun = mean)
@@ -2291,7 +2289,7 @@ write.table(pike_inc, file = "Data/Otoliths/Oto_increment_data_with_rad",
             sep = "\t", dec = ".", row.names = F)
 ```
 
-```{r Bodden growth, echo=FALSE, warning=FALSE, message=FALSE, dpi=600}
+```{r growth visual, echo=FALSE, warning=FALSE, message=FALSE, dpi=600}
 
 rm(list = ls())
 
@@ -2345,45 +2343,6 @@ ggplot(pikedat[pikedat$i!="edge"&pikedat$i!="core",],
         legend.title = element_text(size = 25),
         plot.title = element_text(size = 25))
 #dev.off()
-```
-
-```{r Freshwater growth, echo=FALSE, warning=FALSE, message=FALSE, dpi=600}
-
-rm(list = ls())
-
-#read in data of increments
-pike_inc <- read.delim(file = "Data/Otoliths/Oto_increment_data_with_rad",
-            sep = "\t", dec = ".", header = T, stringsAsFactors = F)
-
-#get clusters
-load("Data/Otoliths/dtw-clusters_cluster-based.RData")
-
-pikedat_F <- fishassign_FSr%>%
-  transmute(ID=ID,
-            area=area,
-            clust=clust)%>%
-  inner_join(pike_inc, by = "ID")
-
-pikedat_F$i <- as.factor(as.numeric(pikedat_F$i))
-
-ggplot(pikedat_F[pikedat_F$i!="edge"&pikedat_F$i!="core",], aes(i,rad, color=clust))+
-  scale_x_discrete(limits = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"),
-                   breaks = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"))+
-  labs(x="Age (years)", y="otolith radius")+
-  geom_boxplot()+theme_minimal()
-
-ggplot(pikedat_F[pikedat_F$i!="edge"&pikedat_F$i!="core",], 
-       aes(clust,TL, color=clust))+
-  labs(x="Cluster", y="TL (mm)")+
-  geom_boxplot()+theme_minimal()
-
-ggplot(pikedat_F[pikedat_F$i!="edge"&pikedat_F$i!="core",], 
-       aes(clust,age, color=clust))+
-  labs(x="Cluster", y="Age (years)")+
-  geom_boxplot()+theme_minimal()
-
-write.table(pikedat_F, "Data/Otoliths/Growthdata_Freshwater-cluster.txt", row.names = F,
-            sep = "\t", dec = ".")
 ```
 
 ```{r mixed modelling growth, include=FALSE, eval=FALSE}
@@ -2451,204 +2410,6 @@ m4 <- lmer(rad~age+(1|ID), data = pikedat,
 anova(m0, m4)
 ```
 
-# Clustering with clean d18O data
-
-
-# Growth
-```{r get clean version of growth data, include=FALSE}
-
-rm(list = ls())
-
-#get clustering results
-fishassign_O <- read.delim("Data/Otoliths/all-clusters_model-based.txt",
-                           header = T, stringsAsFactors = F, 
-                           sep = "\t", dec = ".")
-
-#read in pike data
-fishdata <- read.delim("Data/Scales_Oto_data.txt", sep = "\t", dec = ".", 
-                       header = T, stringsAsFactors = F)
-names(fishdata) <- tolower(names(fishdata))
-
-#load in age readings
-pike_increments_B <- read.delim("Data/Otoliths/Otolith_combo_round2.txt", 
-                              header = T, stringsAsFactors = F)
-names(pike_increments_B) <- tolower(names(pike_increments_B))
-
-pike_increments_Ana <- read.delim("Data/Otoliths/combined_anadromous.txt",
-                                  header = T, stringsAsFactors = F)
-names(pike_increments_Ana) <- tolower(names(pike_increments_Ana))
-
-#read in decoder
-decoder_B <- read.delim("Data/Otoliths/Decoding_file_05-10-21_BH-00670-90307_Otoliths.txt", header = T, stringsAsFactors = F)
-
-names(decoder_B) <- tolower(names(decoder_B))
-
-decoder_Ana <- read.delim("Data/Otoliths/Decoding_file_12-10-21_BH-00670-90307_Otoliths.txt", header = T, stringsAsFactors = F)
-
-names(decoder_Ana) <- tolower(names(decoder_Ana))
-
-pike_increments_B$random_id <- pike_increments_B$sample
-pike_increments_Ana$random_id <- pike_increments_Ana$sample
-
-#decode
-pike_increments_B <- pike_increments_B %>% inner_join(decoder_B, by = "random_id")
-pike_increments_Ana <- pike_increments_Ana%>%inner_join(decoder_Ana, by="random_id")
-
-pike_increments <- rbind(pike_increments_Ana, pike_increments_B)
-
-pike_inc <- pike_increments %>% inner_join(fishdata, by="id")%>%
-  transmute(ID=id,
-            age=age,
-            cohort=cohort,
-            capt=area,
-            TL=tl,
-            weigth=weight,
-            sex=sex,
-            date=parse_date_time(date, "dmy"),
-            core=core,
-            i=i,
-            year=year,
-            increment=increment,
-            quality=quality)
-
-#convert inc to rad
-IDpike <- unique(pike_inc$ID)
-rad <- NULL
-for (i in 1:length(IDpike)) {
-  d <- cumsum(coalesce(pike_inc[which(pike_inc$ID == IDpike[i]), "increment"], 0)) + pike_inc[which(pike_inc$ID == IDpike[i]), "increment"]*0
- rad <- c(rad, d)
-}
-
-pike_inc$rad <- rad
-# plot(Bclust_all_k, type="series")
-# plot(Bclust_Sr_k, type="series")
-# ggplot(fishassign_all, aes(area, fill=clust))+geom_bar()+theme_minimal()
-# ggplot(fishassign_Sr, aes(area, fill=clust))+geom_bar()+theme_minimal()
-# ggplot(fishassign_Fall, aes(capt, fill=clust))+geom_bar()+theme_minimal()
-# ggplot(fishassign_FSr, aes(capt, fill=clust))+geom_bar()+theme_minimal()
-```
-```{r increment growth, echo=FALSE, warning=FALSE, message=FALSE, dpi=600}
-#join increment data with clustering results
-pikedat_B <- fishassign_O%>%
-  transmute(ID=ID,
-            area=area,
-            clust_m=clust_m,
-            clust_dtw=clust_dtw,
-            clust_O=clust_O)%>%
-  inner_join(pike_inc, by = "ID")
-
-pikedat_B$i <- as.factor(as.numeric(pikedat_B$i))
-
-png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Geschwafel/Lab-meeting-11-07-22/Ogrowth.jpg", width = 1600, height = 800)
-ggplot(pikedat_B[pikedat_B$i!="edge"&pikedat_B$i!="core",], aes(i,increment, color=clust_O))+
-  scale_x_discrete(limits = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"),
-                   breaks = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"))+
-  labs(x="age (years)", y="otolith increment (um)")+
-  geom_boxplot()+theme_minimal()+
-  theme(axis.text = element_text(size = 25),
-        axis.title = element_text(size = 25),
-        legend.text = element_text(size = 25),
-        legend.title = element_text(size = 25))
-dev.off()
-
-png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Geschwafel/Lab-meeting-11-07-22/Salgrowth.jpg", width = 1600, height = 800)
-ggplot(pikedat_B[pikedat_B$i!="edge"&pikedat_B$i!="core",], aes(i,increment, color=clust_dtw))+
-  scale_x_discrete(limits = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"),
-                   breaks = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"))+
-  labs(x="Age (years)", y="otolith increment (um)")+
-  geom_boxplot()+theme_minimal()+
-  theme(axis.text = element_text(size = 25),
-        axis.title = element_text(size = 25),
-        legend.text = element_text(size = 25),
-        legend.title = element_text(size = 25))
-dev.off()
-  
-
-ggplot(pikedat_B[pikedat_B$i!="edge"&pikedat_B$i!="core",], aes(i,increment, color=clust_dtw))+
-  geom_boxplot()+theme_minimal()
-
-ggplot(pikedat_B[pikedat_B$i!="edge"&pikedat_B$i!="core",], aes(clust_O,rad))+
-  geom_boxplot()+theme_minimal()
-```
-
-```{r growth modeling}
-center_scale <- function(x){
-  scale(x, scale = F)
-}
-
-pikedat_B$sex <- ifelse(pikedat_B$sex=="f", 1, 0)
-
-Pikedata <- pikedat_B%>%
-  transmute(ID=ID,
-            capt=as.factor(capt.y),
-            area=factor(area),
-            age=age,
-            cohort=cohort,
-            TL=TL,
-            sex=factor(sex, levels = c(0,1), labels = c("m", "f")),
-            i=i,
-            year=year,
-            inc=increment,
-            inclast=rad-inc,
-            rad=rad,
-            #clust_dtw=factor(clust_dtw),
-            clust=factor(clust))%>%
-  drop_na()
-
-m0 <- lmer(rad~age+sex+clust+(1|ID), data = Pikedata)
-
-summary(m0)
-#remove clust
-m1 <- lmer(rad~age+sex+(1|ID), data = Pikedata)
-
-anova(m0,m1)
-
-#remove area
-m2 <- lmer(rad~age+sex+inclast+clust_dtw+clust_O+(1|ID)+(1|year)+(1|cohort), 
-           data = Pikedata)
-anova(m0,m2)
-#area can go
-#remove year
-m3 <- lmer(rad~age+sex+inclast+clust_dtw+clust_O+(1|ID)+(1|cohort), 
-           data = Pikedata)
-anova(m2,m3)
-#year needs to stay
-#remove ID
-m4 <- lmer(rad~age+sex+inclast+clust_dtw+clust_O+(1|year)+(1|cohort), 
-           data = Pikedata)
-anova(m2,m4)
-#ID needs to stay
-m0 <- lmer(rad~age+sex+inclast+clust_dtw+clust_O+(1|ID)+(1|year)+(1|cohort), 
-           data = Pikedata)
-#remove age
-m1.1 <- lmer(rad~sex+inclast+clust_dtw+clust_O+(1|ID)+(1|year)+(1|cohort), 
-           data = Pikedata)
-anova(m0, m1.1)
-#age stays
-#remove sex
-m2.1 <- lmer(rad~age+inclast+clust_dtw+clust_O+(1|ID)+(1|year)+(1|cohort), 
-           data = Pikedata)
-anova(m0,m2.1)
-#sex stays
-#remove inclast
-m3.1 <- lmer(rad~age+sex+clust_dtw+clust_O+(1|ID)+(1|year)+(1|cohort), 
-           data = Pikedata)
-anova(m0,m3.1)
-#inclast stays
-#remove clust_dtw
-m4.1 <- lmer(rad~age+sex+inclast+clust_O+(1|ID)+(1|year)+(1|cohort), 
-           data = Pikedata)
-anova(m0, m4.1)
-#clust_dtw can go
-#remove clust_O
-m5 <- lmer(rad~age+sex+inclast+clust_dtw+(1|ID)+(1|year)+(1|cohort), 
-           data = Pikedata)
-anova(m0, m5)
-
-emmeans(m0, specs = pairwise ~ clust)
-```
-
-
 # Modelling salinity from Sr/Ca
 
 ```{r get last 50 um of Sr/Ca, include=FALSE, eval=FALSE}
@@ -2667,7 +2428,7 @@ Samplingdata <- read.delim(file = "Data/Samp_Inst_months.txt", sep = "\t", heade
 #load Logger data
 Loggerdata <- read.delim(file = "Data/Logger_month_means.txt", sep = "\t", header = T, stringsAsFactors = F)
 
-load("Data/Olga salinity interpolation/Data/IPDW_results.RData")
+load("Data/IPDW_results.RData")
 
 #Bring all into same format, LUNG data
 LUNGdata <- LUNGdata%>%
@@ -2767,7 +2528,8 @@ Srlast <- Srlast%>%
             area=area,
             Lat=Lat,
             Long=Long,
-            date=date)
+            date=date,
+            Sr=Sr)
 
 day(Srlast$date) <- 1
 
@@ -2775,35 +2537,59 @@ day(Srlast$date) <- 1
 Fish_coord <- Srlast%>%
   transmute(ID=ID, 
             area=area, 
-            year=lubridate::year(parse_date_time(date,orders="ymd")),
-            month=lubridate::month(parse_date_time(date,orders="ymd")),
+            date=lubridate::date(parse_date_time(date,orders="ymd")),
             Lat=Lat, 
             Long=Long)%>%
   drop_na()
 
 Fish_coord$Long <- as.numeric(Fish_coord$Long)
 Fish_coord$Lat <- as.numeric(Fish_coord$Lat)
-fish_xy <- Fish_coord[,6:5]
+fish_xy <- Fish_coord[,5:4]
 fish_sp <- SpatialPointsDataFrame(coords = fish_xy, data = Fish_coord, 
                                         proj4string = CRS("+init=epsg:4326"))
 fish_sp <- spTransform(fish_sp, CRS("+proj=utm +zone=33 +ellps=GRS80 
                                   +units=m +no_defs"))
 
-plot(yras$X2020.Month.5)
+plot(salras$X2020.Month.10)
 points(fish_sp)
 
-df <- raster::extract(yras, fish_sp, buffer = 1000, small = T, fun = mean, na.rm = T)
+df <- raster::extract(salras, fish_sp, buffer = 1000, small = T, fun = mean, na.rm = T)
 
 fish_sp <- cbind(fish_sp, df)
 
 fish_sal <- data.frame(fish_sp)
 
-fish_sal %>%
-  pivot_longer(cols = starts_with("x"))
+fish_sal_long <- fish_sal %>%
+  pivot_longer(cols = starts_with("x"), 
+               names_to = "Salmonth", values_to = "Salinity")
+fish_sal_long$Salinity <- ifelse(is.na(fish_sal_long$Salinity), 0.3, fish_sal_long$Salinity)
+fish_sal_long$Salmonth <- paste0(substr(fish_sal_long$Salmonth,1,12),"0",
+                                 substr(fish_sal_long$Salmonth,13,14))
 
-fish_sal <- fish_sal%>%
-  dplyr::select(ends_with("7"))
+fish_sal_long <- fish_sal_long%>%
+  mutate(Salmonth = lubridate::date(parse_date_time
+         (paste0(substr(Salmonth, 2,5),"-",str_sub(Salmonth, -2),"-01"),
+           orders="ymd")))
 
+fish_sal_long%>%
+  filter(Salmonth==date-months(3)|Salmonth==date-months(2)|Salmonth==date-months(1))
+
+fish_sal_mean <- fish_sal_long%>%group_by(ID)%>%
+  summarise(ID=ID,
+            Salinity=mean(Salinity))%>%
+  distinct()
+
+fish_sal_sr <- Srlast%>%inner_join(fish_sal_mean, by="ID")
+
+Salm <- lm(log(Salinity)~log(Sr), data = fish_sal_sr)
+summary(Salm)
+
+a <- Salm$coefficients[[1]]
+b <- Salm$coefficients[[2]]
+```
+
+```{r Bayesian modelling of salinity}
+rm(list = ls())
 
 
 ```
