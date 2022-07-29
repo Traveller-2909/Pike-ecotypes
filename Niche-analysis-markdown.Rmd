@@ -1260,12 +1260,6 @@ writeRaster(Trange, "Data/Temp-ipdw_range_19-21", format="GTiff")
 
 ```
 
-# WTF?
-```{r Sr data conversion, include=FALSE, eval=FALSE}
-Sr_convert <- function(x){
-  ((x/1000)/87.62)/40.078
-}
-```
 # Clustering
 ## Data prep
 ```{r marry d18O data to Sr, include=FALSE}
@@ -1946,8 +1940,8 @@ rm(list = ls())
 #read in data
 load("Data/Otoliths/Adults_element_transects.RData")
 
-Bclust_lowres <- Bclust_lowres%>%filter(ID!="BH-01908")%>%filter(age>=2, year<3)
-Fclust_lowres <- Fclust_lowres%>%filter(age>=2, year<3)
+Bclust_lowres <- Bclust_lowres%>%filter(ID!="BH-01908")%>%filter(age>=3, year<4)
+Fclust_lowres <- Fclust_lowres%>%filter(age>=3, year<4)
 
 Bclust_lowres$area <- ifelse(Bclust_lowres$area=="Marine", "GB", Bclust_lowres$area)
 
@@ -2055,9 +2049,9 @@ plot(Oclust_F$k_3, type="centroid", linetype="solid", cex=1)+
 fishassign_B <- data.frame(ID=names(Bseries_Ores), 
                             clust_O=factor(Oclust_B$k_3@cluster, 
                                            levels = c(1:3), 
-                                           labels = c("Int saline|Int temp",
-                                                      "Low saline|shift temp",
-                                                      "High saline|const temp")))
+                                           labels = c("High saline|const temp",
+                                                      "Int saline|Int temp",
+                                                      "Low saline|shift temp")))
 fishassign_F <- data.frame(ID=names(Fseries_Ores), 
                             clust_O=factor(Oclust_F$k_3@cluster, 
                                            levels = c(1:3), 
@@ -2069,7 +2063,11 @@ fishassign_B <- Bclust_lowres%>%
   group_by(ID)%>%
   transmute(ID=ID,
             capt=capt,
-            area=area)%>%
+            area=as.factor(area),
+            areaorder=case_when(area=="WRB"~1,
+                                area=="NRB"~2,
+                                area=="GB"~3,
+                                area=="Freshwater"~4))%>%
   distinct()%>%
   inner_join(fishassign_B, by="ID")%>%
   mutate(clust_O=fct_relevel(clust_O,
@@ -2092,21 +2090,21 @@ fishassign_F <- Fclust_lowres%>%
 mypallette <- viridis::viridis(3, direction = -1)
 
 #Plot Bodden proportions
-# png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Chapter 2/Stats/Niche analysis/Figures/Clusterassign_WRB.jpg", width = 1200, height = 800)
-ggplot(fishassign_F, aes(capt, fill=clust_O))+
+png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Chapter 2/Stats/Niche analysis/Figures/Clusterassign.jpg", width = 2400, height = 800)
+ggplot(fishassign_B, aes(reorder(area, areaorder), fill=clust_O))+
   geom_bar(position = "fill", width = .5)+theme_minimal()+
   labs(x="", y="proportion", fill="assigned cluster")+
-  scale_fill_manual(breaks=c("Low FW|cold temp",
-                             "Int FW|const temp",
-                             "Anadromous|shift temp"), 
+  scale_fill_manual(breaks=c("Low saline|shift temp",
+                             "Int saline|Int temp",
+                             "High saline|const temp"), 
                     values = mypallette)+
   theme(axis.text.y = element_text(size = 25, color = "black"),
         axis.text.x = element_text(size = 25, color = "black"),
         axis.title = element_text(size = 25),
         legend.text = element_text(size = 25),
         legend.title = element_text(size = 25),
-        legend.position = "right")
-#dev.off()
+        legend.position = "top")
+dev.off()
 
 #Plot FW proportions
 ggplot(fishassign_F, aes(capt, fill=clust_O))+
