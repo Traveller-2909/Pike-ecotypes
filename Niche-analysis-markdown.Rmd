@@ -1951,6 +1951,14 @@ Bclust_lowres$area <- ifelse(Bclust_lowres$area=="Marine", "GB", Bclust_lowres$a
 summary(count(Bclust_lowres, "ID"))
 summary(count(Fclust_lowres, "ID"))
 
+Bclust_lowres$year <- as.factor(Bclust_lowres$year)
+
+summary(Bclust_lowres$year)
+year1 <- round((719/(719+446+243))*30,0)
+year2 <- round((446/(719+446+243))*30,0)
+year3 <- round((243/(719+446+243))*30,0)
+year1+year2+year3
+
 # center_scale <- function(x){
 #   scale(x, scale = F)
 # }
@@ -2030,16 +2038,16 @@ sapply(Oclust_F, cvi, type = "internal")
 
 #Plot best solution
 # png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Chapter 2/Stats/Niche analysis/Figures/Year_3_Sr_d18O_centroids.jpg", width = 2400, height = 800)
-plot(Oclust_B$k_3, type="centroid", linetype="solid", cex=1)+
-  ylim(-2.5,2)+ggtitle(expression("Sr/"~delta^18~O~"cluster centroids"))+
+plot(Oclust_B$k_3, type="sc", linetype="solid", cex=1)+
+  ylim(-2.5,3)+xlim(0,30)+ggtitle(expression("Sr/"~delta^18~O~"cluster centroids"))+
   labs(x="transect cell", y="scaled value")+
   theme(axis.text = element_text(size = 25, color="black"),
         axis.title = element_text(size = 25),
         plot.title = element_text(size = 25, hjust = 0.5))
 #dev.off()
 
-plot(Oclust_F$k_3, type="centroid", linetype="solid", cex=1)+
-  ylim(-2.5,2)+ggtitle(expression("Sr/"~delta^18~O~"cluster centroids"))+
+plot(Oclust_F$k_3, type="series", linetype="solid", cex=1)+
+  ylim(-2.5,2)+xlim(0,30)+ggtitle(expression("Sr/"~delta^18~O~"cluster centroids"))+
   labs(x="transect cell", y="scaled value")+
   theme(axis.text = element_text(size = 25, color="black"),
         axis.title = element_text(size = 25),
@@ -2136,6 +2144,50 @@ write.table(fishassign_F, file = "Data/otoliths/Year_2_Fclusters.txt", row.names
 #             clust_O1=clust_O1,
 #             clust_O2=clust_O)
 ```
+
+```{r dissimilarity est, include=FALSE}
+library(vegan)
+
+SeriesB <- do.call(rbind.data.frame,Bseries_Ores)
+SeriesB$ID <- substr(rownames(SeriesB), 1,8)
+rownames(SeriesB) <- NULL
+SeriesB$cell <- rep(c(1:30), 50)
+
+clus <- fishassign_B%>%
+  transmute(ID=ID,
+            clust=clust_O)
+
+SeriesB <- SeriesB%>%
+  mutate(year=case_when(cell<=year1~1,
+                        cell<=year1+year2&cell>year1~2,
+                        cell>year1+year2~3))%>%
+  inner_join(clus, by="ID")%>%
+  transmute(ID=ID,
+            year=year,
+            cell=cell,
+            clust=clust,
+            Sr=Sr,
+            d18O_res=d18O_res)%>%
+  group_by(ID, year)%>%
+  summarize(ID=ID,
+            year=year,
+            clust=as.numeric(clust),
+            Sr=mean(Sr),
+            d18O_res=mean(d18O_res))%>%
+  distinct()
+
+SeriesA <- pivot_wider(SeriesB, names_from = year, values_from = c(Sr, d18O_res))
+names(SeriesA) <- c("ID", "clust",
+                    "Sr_orig", "Sr_juv", "Sr_adult", 
+                    "O_orig", "O_juv", "O_adult")
+Clusters <- SeriesA[,1:2]
+Values <- SeriesA[,3:8]
+Pikedist <- dist(Clusters)
+
+adonis(Pikedist~Sr_orig, data = Values, method = "euclidean", permutations = 9999)
+#Here you left, you need to bring the element data into a proper (positive) numeric form somehow to do this
+```
+
 
 ```{r mean d18O of clusters}
 rm(list = ls())
