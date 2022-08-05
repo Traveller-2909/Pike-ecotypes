@@ -28,6 +28,8 @@ library(zoo)
 library(dtwclust)
 library(RColorBrewer)
 library(ggpubr)
+library(vegan)
+library(mvabund)
 ```
 
 # Data handling environmental data
@@ -2038,20 +2040,42 @@ sapply(Oclust_F, cvi, type = "internal")
 
 #Plot best solution
 # png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Chapter 2/Stats/Niche analysis/Figures/Year_3_Sr_d18O_centroids.jpg", width = 2400, height = 800)
-plot(Oclust_B$k_3, type="sc", linetype="solid", cex=1)+
+plot(Oclust_B$k_3, type="centroid", linetype="solid", 
+     alpha=0.5, cex=1)+
   ylim(-2.5,3)+xlim(0,30)+ggtitle(expression("Sr/"~delta^18~O~"cluster centroids"))+
+  labs(x="transect cell", y="scaled value")+
+  theme(axis.text = element_text(size = 25, color="black"),
+        axis.title = element_text(size = 25),
+        plot.title = element_text(size = 25, hjust = 0.5))
+
+plot(Oclust_B$k_3, type="sc", linetype="solid", 
+     alpha=0.5, cex=4)+
+  ylim(-3,4)+xlim(0,60)+ggtitle(expression("Sr/"~delta^18~O~"cluster centroids"))+
   labs(x="transect cell", y="scaled value")+
   theme(axis.text = element_text(size = 25, color="black"),
         axis.title = element_text(size = 25),
         plot.title = element_text(size = 25, hjust = 0.5))
 #dev.off()
 
-plot(Oclust_F$k_3, type="series", linetype="solid", cex=1)+
+plot(Oclust_F$k_3, type="series", linetype="dotted", cex=1)+
   ylim(-2.5,2)+xlim(0,30)+ggtitle(expression("Sr/"~delta^18~O~"cluster centroids"))+
   labs(x="transect cell", y="scaled value")+
   theme(axis.text = element_text(size = 25, color="black"),
         axis.title = element_text(size = 25),
         plot.title = element_text(size = 25, hjust = 0.5))
+
+Salcentroid <- DBA(Bseries_Ores[1:10], trace = T, mv.ver = "by-variable")
+matplot(do.call(cbind, Bseries_Ores[1:10]), type = "l")
+points(Salcentroid)
+
+data(uciCT)
+
+# Obtain an average for the first 5 time series
+dtw_avg <- DBA(CharTraj[1:5], trace = TRUE)
+
+# Plot
+matplot(do.call(cbind, CharTraj[1:5]), type = "l")
+lines(dtw_avg)
 
 #assign clusters to fish
 fishassign_B <- data.frame(ID=names(Bseries_Ores), 
@@ -2129,9 +2153,9 @@ ggplot(fishassign_F, aes(capt, fill=clust_O))+
         legend.title = element_text(size = 25),
         legend.position = "right")
 
-write.table(fishassign_B, file = "Data/otoliths/Year_2_Bclusters.txt", row.names = F,
+write.table(fishassign_B, file = "Data/otoliths/Year_3_Bclusters.txt", row.names = F,
             dec = ".", sep = "\t")
-write.table(fishassign_F, file = "Data/otoliths/Year_2_Fclusters.txt", row.names = F,
+write.table(fishassign_F, file = "Data/otoliths/Year_3_Fclusters.txt", row.names = F,
             dec = ".", sep = "\t")
 
 # ggarrange(WRB,NRB,GB,FW, nrow = 1, labels = c("WRB","NRB","GB","FW"), legend.grob = get_legend(NRB))
@@ -2145,8 +2169,74 @@ write.table(fishassign_F, file = "Data/otoliths/Year_2_Fclusters.txt", row.names
 #             clust_O2=clust_O)
 ```
 
-```{r dissimilarity est, include=FALSE}
-library(vegan)
+```{r dissimilarity test, include=FALSE}
+rm(list = ls())
+#read in data
+load("Data/Otoliths/Adults_element_transects.RData")
+
+fishassign_B <- read.delim("Data/otoliths/Year_3_Bclusters.txt", header = T,
+                           stringsAsFactors = F, sep = "\t",dec=".")
+
+fishassign_F <- read.delim("Data/otoliths/Year_3_Fclusters.txt", header = T,
+                           stringsAsFactors = F, sep = "\t",dec=".")
+
+Bclust_lowres <- Bclust_lowres%>%filter(ID!="BH-01908")%>%filter(age>=3, year<4)
+Fclust_lowres <- Fclust_lowres%>%filter(age>=3, year<4)
+
+Bclust_lowres$area <- ifelse(Bclust_lowres$area=="Marine", "GB", Bclust_lowres$area)
+
+Bclust_lowres$year <- as.factor(Bclust_lowres$year)
+
+summary(Bclust_lowres$year)
+year1 <- round((719/(719+446+243))*30,0)
+year2 <- round((446/(719+446+243))*30,0)
+year3 <- round((243/(719+446+243))*30,0)
+year1+year2+year3
+
+#reinterpolate to standard length
+dataB1 <- interpol(series = Bclust_lowres, length = 30, element = "Sr")
+dataB2 <- interpol(series = Bclust_lowres, length = 30, element = "d18O_res")
+
+dataF1 <- interpol(series = Fclust_lowres, length = 30, element = "Sr")
+dataF2 <- interpol(series = Fclust_lowres, length = 30, element = "d18O_res")
+
+dataB <- cbind(dataB1, dataB2[,2])
+dataF <- cbind(dataF1, dataF2[,2])
+
+
+
+colnames(dataB) <- c("ID", "Sr", "d18O_res")
+colnames(dataF) <- c("ID", "Sr", "d18O_res")
+
+dataB$d18O_res <- (dataB$d18O_res+sqrt((min(dataB$d18O_res))^2))
+#So a value of d18O res is now to be interpreted as residual from predicted
+#value + 2.518462
+dataB$Sr <- dataB$Sr*1000
+#This means that for interpretation, the actual value would be 4.1*10e3
+
+dataF$d18O_res <- (dataF$d18O_res+sqrt((min(dataF$d18O_res))^2))
+dataF$Sr <- dataF$Sr*1000
+
+#make list of matrices
+IDOto <- unique(dataB$ID)
+
+Bseries_Ores <- list()
+for (i in 1:length(IDOto)) {
+  m <- as.matrix(dataB[which(dataB$ID==IDOto[i]),c(2,3)])
+  Bseries_Ores[[length(Bseries_Ores)+1]] <- m
+}
+
+names(Bseries_Ores) <- c(IDOto)
+
+IDOto <- unique(dataF$ID)
+
+Fseries_Ores <- list()
+for (i in 1:length(IDOto)) {
+  m <- as.matrix(dataF[which(dataF$ID==IDOto[i]),c(2,3)])
+  Fseries_Ores[[length(Fseries_Ores)+1]] <- m
+}
+
+names(Fseries_Ores) <- c(IDOto)
 
 SeriesB <- do.call(rbind.data.frame,Bseries_Ores)
 SeriesB$ID <- substr(rownames(SeriesB), 1,8)
@@ -2171,7 +2261,7 @@ SeriesB <- SeriesB%>%
   group_by(ID, year)%>%
   summarize(ID=ID,
             year=year,
-            clust=as.numeric(clust),
+            clust=clust,
             Sr=mean(Sr),
             d18O_res=mean(d18O_res))%>%
   distinct()
@@ -2180,12 +2270,137 @@ SeriesA <- pivot_wider(SeriesB, names_from = year, values_from = c(Sr, d18O_res)
 names(SeriesA) <- c("ID", "clust",
                     "Sr_orig", "Sr_juv", "Sr_adult", 
                     "O_orig", "O_juv", "O_adult")
-Clusters <- SeriesA[,1:2]
-Values <- SeriesA[,3:8]
-Pikedist <- dist(Clusters)
+SeriesA$clust <- as.factor(SeriesA$clust)
+elements <- mvabund(SeriesA[,3:8])
 
-adonis(Pikedist~Sr_orig, data = Values, method = "euclidean", permutations = 9999)
-#Here you left, you need to bring the element data into a proper (positive) numeric form somehow to do this
+boxplot(elements)
+meanvar.plot(elements)
+elements_only <- elements
+plot(elements~SeriesA$clust)
+
+
+Pikedist <- vegdist(elements, method = "euclidean")
+Disp <- betadisper(Pikedist, SeriesA$clust)
+anova(Disp)
+
+Per <- adonis2(elements~SeriesA$clust, method = "euclidean", permutations = 9999)
+Per
+```
+
+```{r reclassification, include=FALSE}
+rm(list = ls())
+#read in data
+load("Data/Otoliths/Adults_element_transects.RData")
+
+fishassign_B <- read.delim("Data/otoliths/Year_3_Bclusters.txt", header = T,
+                           stringsAsFactors = F, sep = "\t",dec=".")
+
+fishassign_F <- read.delim("Data/otoliths/Year_3_Fclusters.txt", header = T,
+                           stringsAsFactors = F, sep = "\t",dec=".")
+
+Bclust_lowres <- Bclust_lowres%>%filter(ID!="BH-01908")%>%filter(age>=3, year<4)
+Fclust_lowres <- Fclust_lowres%>%filter(age>=3, year<4)
+
+Bclust_lowres$area <- ifelse(Bclust_lowres$area=="Marine", "GB", Bclust_lowres$area)
+
+Bclust_lowres$year <- as.factor(Bclust_lowres$year)
+
+summary(Bclust_lowres$year)
+year1 <- round((719/(719+446+243))*30,0)
+year2 <- round((446/(719+446+243))*30,0)
+year3 <- round((243/(719+446+243))*30,0)
+year1+year2+year3
+
+#reinterpolate to standard length
+dataB1 <- interpol(series = Bclust_lowres, length = 30, element = "Sr")
+dataB2 <- interpol(series = Bclust_lowres, length = 30, element = "d18O_res")
+
+dataF1 <- interpol(series = Fclust_lowres, length = 30, element = "Sr")
+dataF2 <- interpol(series = Fclust_lowres, length = 30, element = "d18O_res")
+
+dataB <- cbind(dataB1, dataB2[,2])
+dataF <- cbind(dataF1, dataF2[,2])
+
+
+
+colnames(dataB) <- c("ID", "Sr", "d18O_res")
+colnames(dataF) <- c("ID", "Sr", "d18O_res")
+
+#make list of matrices
+IDOto <- unique(dataB$ID)
+
+Bseries_Ores <- list()
+for (i in 1:length(IDOto)) {
+  m <- as.matrix(dataB[which(dataB$ID==IDOto[i]),c(2,3)])
+  Bseries_Ores[[length(Bseries_Ores)+1]] <- m
+}
+
+names(Bseries_Ores) <- c(IDOto)
+
+IDOto <- unique(dataF$ID)
+
+Fseries_Ores <- list()
+for (i in 1:length(IDOto)) {
+  m <- as.matrix(dataF[which(dataF$ID==IDOto[i]),c(2,3)])
+  Fseries_Ores[[length(Fseries_Ores)+1]] <- m
+}
+
+names(Fseries_Ores) <- c(IDOto)
+
+SeriesB <- do.call(rbind.data.frame,Bseries_Ores)
+SeriesB$ID <- substr(rownames(SeriesB), 1,8)
+rownames(SeriesB) <- NULL
+SeriesB$cell <- rep(c(1:30), 50)
+
+clus <- fishassign_B%>%
+  transmute(ID=ID,
+            clust=clust_O)
+
+SeriesB <- SeriesB%>%
+  mutate(year=case_when(cell<=year1~1,
+                        cell<=year1+year2&cell>year1~2,
+                        cell>year1+year2~3))%>%
+  inner_join(clus, by="ID")%>%
+  transmute(ID=ID,
+            year=year,
+            cell=cell,
+            clust=clust,
+            Sr=Sr,
+            d18O_res=d18O_res)%>%
+  group_by(ID, year)%>%
+  summarize(ID=ID,
+            year=year,
+            clust=clust,
+            Sr=mean(Sr),
+            d18O_res=mean(d18O_res))%>%
+  distinct()
+
+SeriesA <- pivot_wider(SeriesB, names_from = year, values_from = c(Sr, d18O_res))
+names(SeriesA) <- c("ID", "clust",
+                    "Sr_orig", "Sr_juv", "Sr_adult", 
+                    "O_orig", "O_juv", "O_adult")
+SeriesA$clust <- as.factor(SeriesA$clust)
+
+set.seed(123)
+sample <- sample(c(TRUE, FALSE), nrow(SeriesA), 
+                 replace = T, prob = c(0.6,0.4))
+train <- SeriesA[sample,]
+test <- SeriesA[!sample,]
+
+lda.m1 <- lda(clust~Sr_orig+Sr_juv+Sr_adult+O_orig+O_juv+O_adult, 
+              data = train)
+plot(lda.m1)
+
+df.pred <- data.frame(predict(lda.m1, newdata=test))
+lda.cm <- table(test$clust, df.pred$class)
+
+list(LDA_model = lda.cm %>% prop.table()%>%round(3))
+
+test$lda.pred <- df.pred$class
+
+test %>% summarise(lda.error=mean(clust != lda.pred))
+
+list(LDA_model=lda.cm)
 ```
 
 
