@@ -2853,7 +2853,29 @@ fish_sal_mean <- fish_sal_long%>%group_by(ID)%>%
             Salinity=mean(Salinity))%>%
   distinct()
 
-fish_sal_sr <- Srlast%>%inner_join(fish_sal_mean, by="ID")
+fish_sal_sr <- Srlast%>%inner_join(fish_sal_mean, by="ID")%>%
+  transmute(ID=ID,
+            sex=sex,
+            weight=weight,
+            TL=TL,
+            capt=area,
+            area=case_when(capt=="Peene"~"FW",
+                           capt=="Barthe"~"FW",
+                           capt=="WB"~"SW",
+                           capt=="BEG"~"SW",
+                           capt=="KJB"~"SW",
+                           capt=="SB"~"SW",
+                           capt=="KB"~"SW",
+                           capt=="GB"~"SW",
+                           capt=="NHG"~"Ana",
+                           capt=="Sehrowbach"~"Ana",
+                           capt=="Bandycksgraben"~"Ana",
+                           capt=="Ziese"~"Ana"),
+            Lat=Lat,
+            Long=Long,
+            date=date,
+            Sr=Sr,
+            Salinity=Salinity)
 
 Salm <- lm(Salinity~Sr, data = fish_sal_sr)
 summary(Salm)
@@ -2863,7 +2885,48 @@ b <- Salm$coefficients[[2]]
 
 newdata <- data.frame(Sr = seq(0.001,0.006, 0.0005))
 
-newdata$salinity <- predict(Salm, newdata)
+newdata$salinity2 <- predict(Salm, newdata)
+
+log_posterior <- function(params, data){
+  #parameters for regression model
+  a = params['a']
+  b = params['b']
+  s = params['s']
+  x = data[['x']]
+  y = data[['y']]
+  
+  #Probability
+  mu = plogis(a+b*x)
+  
+  #liklihood
+  logpr = sum(dnorm(y, mu, s, log = TRUE))
+  
+  #priors
+  logpr=logpr+dnorm(a,0,10,log=TRUE)+dnorm(b,0,5,log=TRUE)+dexp(s,0.2,log=TRUE)
+  logpr
+}
+
+data <- with(fish_sal_sr, data.frame(x=Sr*1000, y=Salinity))
+
+param_init <- c(a=0, b=0, s=1)
+
+fit <- optim(param_init, log_posterior, data=data, method = "Nelder-Mead",
+                 control = list(fnscale=-1), hessian = TRUE)
+vcv <- solve(-fit$hessian)
+
+fit$par
+a <- fit$par[1]
+b <- fit$par[2]
+
+newdata$Sal3 <- a+b*(newdata$Sr*1000)
+
+vcv
+
+sds <- sqrt(diag(vcv))
+
+sds
+
+ggplot(fish_sal_sr, aes(Sr, Salinity, color=capt))+geom_point()+theme_minimal()
 ```
 
 ```{r Bayesian modelling of salinity}
