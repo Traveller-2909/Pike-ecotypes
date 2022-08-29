@@ -179,7 +179,8 @@ LUNG_sal_temp_rivers <- LUNG_sal_temp_rivers%>%
 # remove double rows before converting to wide
 LUNG_sal_temp_coast <- LUNG_sal_temp_coast[-c(11296, 11298, 563, 564),]
 
-LUNG_sal_temp_coast <- LUNG_sal_temp_coast%>%group_by(name, year, month, parameter)%>%
+LUNG_sal_temp_coast <- LUNG_sal_temp_coast%>%
+  group_by(name, year, month, parameter)%>%
   summarize(id = id,
             name = name,
             waterbody = waterbody,
@@ -355,7 +356,7 @@ LUNGdata_all$SAL <- ifelse(is.na(LUNGdata_all$SAL), mean())##Here you left you d
 # save file
 write.table(LUNGdata_all, file = "Data/LUNGdata_clean.txt", sep = "\t", row.names = F)
 Test <- read.delim("Data/LUNGdata_clean.txt", header = T, sep = "\t")
-Test
+View(Test)
 ```
 
 ```{r Logger cleanup, include=FALSE, eval=FALSE}
@@ -521,8 +522,11 @@ LUNGdata_complete <- LUNGdata_months%>%
             type = type,
             SAL = case_when(is.na(SAL)~mean(SAL, na.rm = T),
                             TRUE ~ SAL),
-            WT = case_when(is.na(W.T)~mean(W.T, na.rm = T),
-                            TRUE ~ W.T))
+            WT = W.T)%>%
+  ungroup()%>%
+  group_by(id, month)%>%
+  mutate(WT=case_when(is.na(WT)~mean(WT, na.rm = T),
+                            TRUE ~ WT))
 
 write.table(LUNGdata_complete, file = "Data/LUNGdata_complete.txt", sep = "\t", row.names = F)
 
@@ -1125,10 +1129,12 @@ Loggerdata <- Loggerdata%>%
             SAL = SAL,
             WT = WT)
 
-#Join & filter out feshwater
+#Join & filter out freshwater, filter for years/months
 Saldata <- rbind(LUNGdata, Samplingdata, Loggerdata)
 Saldata <- Saldata%>%filter(type == "Coast" & 
-                              year==2019|year == 2020|year == 2021)
+                              year==2019|year == 2020|year == 2021)%>%
+  filter(month==8)
+
 
 #load in receiver for later checking accessibility of rasterstack
 Rec <- read.csv2("Data/Rec-Arrays_ALL.csv", header = T, 
@@ -1167,7 +1173,7 @@ for (i in 1:length(monthID)) {
     
     #generate costraster, resolution in m
     costras <- costrasterGen(pnts, Land, extent = "polys", 
-                             resolution = c(500, 500),
+                             resolution = c(100, 100),
                              projstr = projection(Land))
     
     #mean neighbor distance
@@ -1218,7 +1224,7 @@ for (i in 1:length(monthID)) {
     #ipdw calculations require projected data, make sure projections match
     projection(training) <- projection(pnts)
     projection(validate) <- projection(pnts)
-    paramlist <- c("SAL")
+    paramlist <- c("WT")
     
     #perform ipdw, set name to month & year
     ipdw <- ipdw(training, costras, range = mean.neighdist*10, 
@@ -1237,11 +1243,11 @@ for (i in 1:length(monthID)) {
     #save measurement errors in list
     validation <- c(validation, valid.ipdw)
     #save interpolations into rasterstack
-    tras <- stack(tras, ipdw)
+    tras2 <- stack(tras2, ipdw)
 }
 
-#example for simple error comparison between prediction & measured
-valid <- lm(validation[[11]]$SAL ~ validation[[11]]$predicted)
+ #example for simple error comparison between prediction & measured
+valid <- lm(validation[[11]]$WT ~ validation[[11]]$predicted)
 summary(valid)
 
 #This extracts salinity values from around the receivers and forms a mean
@@ -1252,9 +1258,12 @@ salras <- tras
 
 #save to RData
 save(salras, validation, file = "Data/IPDW_results.RData")
+save(tras, meanRast, file = "Data/PDW_Jan2019-21.RData")
+
 load("Data/Olga Salinity interpolation/Data/IPDW_results.RData")
 
-meanRast2 <- calc(tras, fun = mean)
+
+meanRast <- calc(tras, fun = mean)
 Trange <- meanRast2-meanRast
 
 ##Here you left, now look for those fucked up Temp data
@@ -2412,7 +2421,6 @@ test %>% summarise(lda.error=mean(clust != lda.pred))
 list(LDA_model=lda.cm)
 ```
 
-
 ```{r mean d18O of clusters}
 rm(list = ls())
 
@@ -2576,21 +2584,23 @@ pike_inc <- read.delim(file = "Data/Otoliths/Oto_increment_data_with_rad",
 
 
 #get clustering results
-fishassign_B <- read.delim(file = "Data/otoliths/Year_2_Bclusters.txt", 
+fishassign_B <- read.delim(file = "Data/otoliths/Year_3_Bclusters.txt", 
                            header = T, stringsAsFactors = F, dec = ".", sep = "\t")
-fishassign_F <- read.delim(file = "Data/otoliths/Year_2_Fclusters.txt", 
+fishassign_F <- read.delim(file = "Data/otoliths/Year_3_Fclusters.txt", 
                            header = T, stringsAsFactors = F, dec = ".", sep = "\t")
-fishassign_B$mclust <- factor(rep(1,67), levels = 1, labels = "Marine")
-fishassign_F$mclust <- factor(rep(2,17), levels = 2, labels = "FW")
+fishassign_B$mclust <- factor(rep(1,50), levels = 1, labels = "Marine")
+fishassign_F$mclust <- factor(rep(2,12), levels = 2, labels = "FW")
 
-allpike <- rbind(fishassign_B, fishassign_F)
+allpike <- rbind(fishassign_B[,c(1:3,5,6)], fishassign_F)
 
 #join increment data with clustering results
-pikedat <- allpike%>%
+pikedat <- fishassign_B%>%
   transmute(ID=ID,
             capt=capt,
             area=area,
-            clust=clust_O,
+            clust=case_when(clust_O %in% "High saline|const temp"~"Hochsalin warm",
+                            clust_O %in% "Int saline|Int temp"~"Mittelsalin kalt",
+                            clust_O %in% "Low saline|shift temp"~"Niedigsalin Wechsel"),
             mclust=mclust)%>%
   inner_join(pike_inc, by = "ID")
 
@@ -2598,16 +2608,16 @@ pikedat$i <- as.factor(as.numeric(pikedat$i))
 
 mypallette <- viridis::viridis(3, direction = -1)
 
-#png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Chapter 2/Stats/Niche analysis/Figures/Growth_cluster_year3.jpg", width = 1200, height = 800)
+png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Geschwafel/Graphic repository/Growth_cluster_year3.jpg", width = 2400, height = 1600)
 ggplot(pikedat[pikedat$i!="edge"&pikedat$i!="core",], 
        aes(i,rad, fill=clust))+
-  scale_x_discrete(limits = c(as.character(c(1:10))),
-                   breaks = c(as.character(c(1:10))))+
-  labs(x="Age (years)", y="otolith increment (\U00B5m)", title = "Cluster-dependent growth",
-       fill="Cluster")+
-  #scale_fill_manual(breaks = c("Low saline|shift temp","Int saline|cold temp",
-                             #"High saline|constant temp"), values = mypallette)+
-  geom_boxplot()+theme_minimal()+
+  scale_x_discrete(limits = c(as.character(c(1:3))),
+                   breaks = c(as.character(c(1:3))))+
+  labs(x="Alter (Jahre)", y="Otolitheninkrement (\U00B5m)", title = "",
+       fill="Ökotyp")+
+  scale_fill_manual(breaks = c("Niedigsalin Wechsel","Mittelsalin kalt",
+                             "Hochsalin warm"), values = mypallette)+
+  geom_violin()+theme_minimal()+
   scale_fill_viridis_d()+
   scale_colour_viridis_d(direction = 1)+
   theme(axis.text.y = element_text(size = 25, color = "black"),
@@ -2616,7 +2626,7 @@ ggplot(pikedat[pikedat$i!="edge"&pikedat$i!="core",],
         legend.text = element_text(size = 25),
         legend.title = element_text(size = 25),
         plot.title = element_text(size = 25))
-#dev.off()
+dev.off()
 ```
 
 ```{r mixed modelling growth, include=FALSE, eval=FALSE}
@@ -2975,6 +2985,5 @@ Otoj_highres <- read.delim("Data/Otoliths/Oto_juveniles_d18O-to-LA.txt",
 Tplot("BH-01893")
 JTplot("BH-01922")
 ```
-
 
  
