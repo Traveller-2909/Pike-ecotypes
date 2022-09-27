@@ -10,7 +10,6 @@ library(readxl)
 library(sp)
 library(rgdal)
 library(purrr)
-library(compensateR)
 library(lubridate)
 library(measurements)
 library(ipdw)
@@ -19,7 +18,6 @@ library(spatstat)
 library(gdata)
 library(rgeos)
 library(sf)
-library(rspatial)
 library(dismo)
 library(gstat)
 library(lme4)
@@ -1132,7 +1130,7 @@ Loggerdata <- Loggerdata%>%
 #Join & filter out freshwater, filter for years/months
 Saldata <- rbind(LUNGdata, Samplingdata, Loggerdata)
 Saldata <- Saldata%>%filter(type == "Coast" & 
-                              year==2019|year == 2020|year == 2021)%>%
+                              year==2019)%>%
   filter(month==8)
 
 
@@ -1148,7 +1146,9 @@ rec_sp <- spTransform(rec_sp, CRS("+proj=utm +zone=33 +ellps=GRS80
                                   +units=m +no_defs"))
 
 #load in land layer
-Land <- readOGR("Data/Rügen_landcover_simplified_1Pol.gpkg")
+Land <- readOGR("Data/Bodden_areas_for_R_2.gpkg")
+  
+  readOGR("Data/Rügen_landcover_simplified_1Pol.gpkg")
 #transform to UTM (meters)
 Land <- spTransform(Land, CRS("+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs"))
             
@@ -1173,7 +1173,7 @@ for (i in 1:length(monthID)) {
     
     #generate costraster, resolution in m
     costras <- costrasterGen(pnts, Land, extent = "polys", 
-                             resolution = c(100, 100),
+                             resolution = 250,
                              projstr = projection(Land))
     
     #mean neighbor distance
@@ -1243,11 +1243,11 @@ for (i in 1:length(monthID)) {
     #save measurement errors in list
     validation <- c(validation, valid.ipdw)
     #save interpolations into rasterstack
-    tras2 <- stack(tras2, ipdw)
+    tras <- stack(tras, ipdw)
 }
 
  #example for simple error comparison between prediction & measured
-valid <- lm(validation[[11]]$WT ~ validation[[11]]$predicted)
+valid <- lm(validation[[2]]$WT ~ validation[[2]]$predicted)
 summary(valid)
 
 #This extracts salinity values from around the receivers and forms a mean
@@ -1269,6 +1269,7 @@ Trange <- meanRast2-meanRast
 ##Here you left, now look for those fucked up Temp data
 
 writeRaster(Trange, "Data/Temp-ipdw_range_19-21", format="GTiff")
+writeRaster(tras, "Data/Temp-test", format="GTiff", overwrite=T)
 
 ```
 
