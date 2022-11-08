@@ -1073,7 +1073,7 @@ final.ipdw <- ipdw(training, costras, range = mean.neighdist*10, paramlist, over
 plot(final.ipdw, main = "Bodden salinity")
 ```
 
-```{r ipdw loop, include=FALSE, eval=FALSE}
+```{r ipdw loop data, include=FALSE, eval=FALSE}
 
 rm(list = ls())
 #load in LUNGdata
@@ -1131,21 +1131,22 @@ Loggerdata <- Loggerdata%>%
 ```{r ipdw loop, include=FALSE, eval=FALSE}
 #Join & filter out freshwater, filter for years/months
 Saldata <- rbind(LUNGdata, Samplingdata, Loggerdata)
+Saldata <- LUNGdata
+
 Saldata <- Saldata%>%filter(type == "Coast" & 
-                              year>=2007&
-                              name != "sampling instance")%>%
-  group_by(month)%>%
+                              year>=2017 & month > 1 & month < 5)%>%
+  group_by(year, month, id, waterbody)%>%
   summarise(name=name,
             id=id,
             waterbody=waterbody,
             month=month,
-            year=2022,
-            identifier=paste0("2022", month),
+            year=year,
+            identifier=paste0(year, month),
             Lat=Lat,
             Long=Long,
             type=type,
-            SAL=mean(SAL),
-            WT=mean(WT))%>%
+            SAL=round(mean(SAL),2),
+            WT=round(mean(WT),2))%>%
   distinct()
 
 #correct typo in sampling point
@@ -1170,7 +1171,7 @@ Land <- spTransform(Land, CRS("+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs
             
 #DEf
 monthID <- unique(Saldata$identifier)
-tras <- stack()
+sras <- stack()
 mras <- stack()
 validation <- NULL
 
@@ -1240,7 +1241,7 @@ for (i in 1:length(monthID)) {
     #ipdw calculations require projected data, make sure projections match
     projection(training) <- projection(pnts)
     projection(validate) <- projection(pnts)
-    paramlist <- c("WT")
+    paramlist <- c("SAL")
     
     #perform ipdw, set name to month & year
     ipdw <- ipdw(training, costras, range = mean.neighdist*10, 
@@ -1259,9 +1260,10 @@ for (i in 1:length(monthID)) {
     #save measurement errors in list
     validation <- c(validation, valid.ipdw)
     #save interpolations into rasterstack
-    tras <- stack(tras, ipdw)
+    sras <- stack(sras, ipdw)
 }
-plot(tras)
+
+ plot(Land)
 
  #example for simple error comparison between prediction & measured
 valid <- lm(validation[[2]]$WT ~ validation[[2]]$predicted)
@@ -1274,20 +1276,43 @@ raster::extract(yras, rec_sp, buffer = 500, small = T, fun = mean, na.rm = T)
 salras <- tras
 
 #save to RData
-save(salras, validation, file = "Data/IPDW_results.RData")
-save(tras, meanRast, file = "Data/PDW_Jan2019-21.RData")
+save(sras, file = "Data/Spatial/Output/Salinity-IPDW-mean-2007-2022_monthly.RData")
+save(tras, file = "Data/Spatial/Output/Temp-IPDW-mean-2007-2022_monthly.RData")
 
-load("Data/Olga Salinity interpolation/Data/IPDW_results.RData")
+#load("Data/Olga Salinity interpolation/Data/IPDW_results.RData")
 
+#yearly salinity
+smean <- calc(sras, fun = mean)
+ssd <- calc(sras, fun = sd)
+srange <- calc(sras, fun = range)
 
-meanRast <- calc(tras, fun = mean)
-Trange <- meanRast2-meanRast
+srange_absolute <- srange$layer.2-srange$layer.1
 
-##Here you left, now look for those fucked up Temp data
+plot(srange_absolute)
 
-writeRaster(Trange, "Data/Temp-ipdw_range_19-21", format="GTiff")
-writeRaster(tras, "Data/Temp-test", format="GTiff", overwrite=T)
+#yearly temperature
+tmean <- calc(tras, fun = mean)
+trange <- calc(tras, fun = range)
+sdRast <- calc(tras, fun = sd)
 
+trange_absolute <- trange$layer.2-trange$layer.1
+
+plot(smean)
+
+#Write salinity rasters
+writeRaster(smean, "Data/Spatial/Output/Sal-ipdw_mean_17-22", format="GTiff",
+            overwrite=T)
+writeRaster(ssd, "Data/Spatial/Output/Sal-ipdw_sd_17-22", format="GTiff", overwrite=T)
+writeRaster(srange_absolute,"Data/Spatial/Output/Sal-ipdw_range_17-22", format="GTiff", overwrite=T)
+
+#Write temperature rasters
+writeRaster(srange_absolute, "Data/Spatial/Output/Sal-ipdw_range_07-22", format="GTiff")
+writeRaster(ssd, "Data/Spatial/Output/Sal-ipdw_sd_07-22", format="GTiff", overwrite=T)
+writeRaster(smean, "Data/Spatial/Output/Sal-ipdw_mean_07-22", format="GTiff", overwrite=T)
+
+#Write measuring station shapefile
+rgdal::writeOGR(pnts, dsn = "Data/Spatial/Output", layer = "coords", driver = "ESRI Shapefile")
+plot(pnts)
 ```
 
 # Clustering
@@ -1970,8 +1995,8 @@ rm(list = ls())
 #read in data
 load("Data/Otoliths/Adults_element_transects.RData")
 
-Bclust_lowres <- Bclust_lowres%>%filter(ID!="BH-01908")%>%filter(age>=3, year<4)
-Fclust_lowres <- Fclust_lowres%>%filter(age>=3, year<4)
+Bclust_lowres <- Bclust_lowres%>%filter(ID!="BH-01908")
+Fclust_lowres <- Fclust_lowres
 
 Bclust_lowres$area <- ifelse(Bclust_lowres$area=="Marine", "GB", Bclust_lowres$area)
 
@@ -1994,11 +2019,11 @@ year1+year2+year3
 # }
 
 #reinterpolate to standard length
-dataB1 <- interpol(series = Bclust_lowres, length = 30, element = "Sr")
-dataB2 <- interpol(series = Bclust_lowres, length = 30, element = "d18O_res")
+dataB1 <- interpol(series = Bclust_lowres, length = 35, element = "Sr")
+dataB2 <- interpol(series = Bclust_lowres, length = 35, element = "d18O_res")
 
-dataF1 <- interpol(series = Fclust_lowres, length = 30, element = "Sr")
-dataF2 <- interpol(series = Fclust_lowres, length = 30, element = "d18O_res")
+dataF1 <- interpol(series = Fclust_lowres, length = 40, element = "Sr")
+dataF2 <- interpol(series = Fclust_lowres, length = 40, element = "d18O_res")
 
 dataB <- cbind(dataB1, dataB2[,2])
 dataF <- cbind(dataF1, dataF2[,2])
@@ -2048,21 +2073,21 @@ names(Fseries_Ores) <- c(IDOto)
 
 #cluster Bodden with cutoff test
 Oclust_B <- tsclust(series = Bseries_Ores, type = "hierarchical",
-                  k = 3L:6L,centroid = dba,
+                  k = 2L:6L,centroid = dba,
                   control = hierarchical_control(method = "ward.D"),
                   seed = 94L,args = tsclust_args(dist = list(window.size =5L)))
 
-names(Oclust_B) <- paste0("k_",3L:6L)
+names(Oclust_B) <- paste0("k_",2L:6L)
 
 sapply(Oclust_B, cvi, type = "internal")
 
 #cluster FW with cutoff test
 Oclust_F <- tsclust(series = Fseries_Ores, type = "hierarchical",
-                  k = 3L:6L,centroid = dba,
+                  k = 2L:6L,centroid = dba,
                   control = hierarchical_control(method = "ward.D"),
                   seed = 96L,args = tsclust_args(dist = list(window.size =5L)))
 
-names(Oclust_F) <- paste0("k_",3L:6L)
+names(Oclust_F) <- paste0("k_",2L:6L)
 
 sapply(Oclust_F, cvi, type = "internal")
 
@@ -2070,7 +2095,7 @@ sapply(Oclust_F, cvi, type = "internal")
 # png(filename = "C:/Users/timor/Nextcloud2/Timo/BODDENHECHT/Chapter 2/Stats/Niche analysis/Figures/Year_3_Sr_d18O_centroids.jpg", width = 2400, height = 800)
 plot(Oclust_B$k_3, type="centroid", linetype="solid", 
      alpha=0.5, cex=1)+
-  ylim(-2.5,3)+xlim(0,30)+ggtitle(expression("Sr/"~delta^18~O~"cluster centroids"))+
+  ylim(-2.5,3)+ggtitle(expression("Sr/"~delta^18~O~"cluster centroids"))+
   labs(x="transect cell", y="scaled value")+
   theme(axis.text = element_text(size = 25, color="black"),
         axis.title = element_text(size = 25),
@@ -2085,8 +2110,8 @@ plot(Oclust_B$k_3, type="sc", linetype="solid",
         plot.title = element_text(size = 25, hjust = 0.5))
 #dev.off()
 
-plot(Oclust_F$k_3, type="series", linetype="dotted", cex=1)+
-  ylim(-2.5,2)+xlim(0,30)+ggtitle(expression("Sr/"~delta^18~O~"cluster centroids"))+
+plot(Oclust_F$k_3, type="centroid", linetype="solid", cex=1)+
+  ylim(-2.5,2)+ggtitle(expression("Sr/"~delta^18~O~"cluster centroids"))+
   labs(x="transect cell", y="scaled value")+
   theme(axis.text = element_text(size = 25, color="black"),
         axis.title = element_text(size = 25),
@@ -2109,15 +2134,15 @@ lines(dtw_avg)
 fishassign_B <- data.frame(ID=names(Bseries_Ores), 
                             clust_O=factor(Oclust_B$k_3@cluster, 
                                            levels = c(1:3), 
-                                           labels = c("High saline|const temp",
-                                                      "Int saline|Int temp",
-                                                      "Low saline|shift temp")))
+                                           labels = c("Int saline|Int temp",
+                                                      "Low saline|shift temp",
+                                                      "High saline|const temp")))
 fishassign_F <- data.frame(ID=names(Fseries_Ores), 
                             clust_O=factor(Oclust_F$k_3@cluster, 
                                            levels = c(1:3), 
                                            labels = c("Int FW|const temp",
-                                                      "Anadromous|shift temp",
-                                                      "Low FW|cold temp")))
+                                                      "Low FW|cold temp",
+                                                      "Anadromous|shift temp")))
 #Join with data
 fishassign_B <- Bclust_lowres%>%
   group_by(ID)%>%
@@ -2730,7 +2755,7 @@ Samplingdata <- read.delim(file = "Data/Samp_Inst_months.txt", sep = "\t", heade
 #load Logger data
 Loggerdata <- read.delim(file = "Data/Logger_month_means.txt", sep = "\t", header = T, stringsAsFactors = F)
 
-load("Data/IPDW_results.RData")
+load("Data/Spatial/IPDW_results.RData")
 
 #Bring all into same format, LUNG data
 LUNGdata <- LUNGdata%>%
@@ -2911,7 +2936,7 @@ summary(Salm)
 a <- Salm$coefficients[[1]]
 b <- Salm$coefficients[[2]]
 
-newdata <- data.frame(Sr = seq(0.001,0.006, 0.0005))
+newdata <- data.frame(Sr = seq(0.0007,0.006, 0.0001))
 
 newdata$salinity2 <- predict(Salm, newdata)
 
