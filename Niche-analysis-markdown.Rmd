@@ -1126,29 +1126,45 @@ Loggerdata <- Loggerdata%>%
             type = type,
             SAL = SAL,
             WT = WT)
+```
 
+```{r ipdw loop, include=FALSE, eval=FALSE}
 #Join & filter out freshwater, filter for years/months
 Saldata <- rbind(LUNGdata, Samplingdata, Loggerdata)
 Saldata <- Saldata%>%filter(type == "Coast" & 
-                              year==2019)%>%
-  filter(month==8)
+                              year>=2007&
+                              name != "sampling instance")%>%
+  group_by(month)%>%
+  summarise(name=name,
+            id=id,
+            waterbody=waterbody,
+            month=month,
+            year=2022,
+            identifier=paste0("2022", month),
+            Lat=Lat,
+            Long=Long,
+            type=type,
+            SAL=mean(SAL),
+            WT=mean(WT))%>%
+  distinct()
 
+#correct typo in sampling point
+Saldata[Saldata$identifier=="20222"&Saldata$waterbody=="SB",]$Long <- 13.15835
 
 #load in receiver for later checking accessibility of rasterstack
-Rec <- read.csv2("Data/Rec-Arrays_ALL.csv", header = T, 
-                 stringsAsFactors = F, sep = ",")
-Rec$Longitude <- as.numeric(Rec$Longitude)
-Rec$Latitude <- as.numeric(Rec$Latitude)
-rec_xy <- Rec[,1:2]
-rec_sp <- SpatialPointsDataFrame(coords = rec_xy, data = Rec, 
-                                        proj4string = CRS("+init=epsg:4326"))
-rec_sp <- spTransform(rec_sp, CRS("+proj=utm +zone=33 +ellps=GRS80 
-                                  +units=m +no_defs"))
+# Rec <- read.csv2("Data/Rec-Arrays_ALL.csv", header = T, 
+#                  stringsAsFactors = F, sep = ",")
+# Rec$Longitude <- as.numeric(Rec$Longitude)
+# Rec$Latitude <- as.numeric(Rec$Latitude)
+# rec_xy <- Rec[,1:2]
+# rec_sp <- SpatialPointsDataFrame(coords = rec_xy, data = Rec, 
+#                                         proj4string = CRS("+init=epsg:4326"))
+# rec_sp <- spTransform(rec_sp, CRS("+proj=utm +zone=33 +ellps=GRS80 
+#                                   +units=m +no_defs"))
 
 #load in land layer
-Land <- readOGR("Data/Bodden_areas_for_R_2.gpkg")
+Land <- readOGR("Data/Spatial/Studyarea_buffered.gpkg")
   
-  readOGR("Data/Rügen_landcover_simplified_1Pol.gpkg")
 #transform to UTM (meters)
 Land <- spTransform(Land, CRS("+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs"))
             
@@ -1245,6 +1261,7 @@ for (i in 1:length(monthID)) {
     #save interpolations into rasterstack
     tras <- stack(tras, ipdw)
 }
+plot(tras)
 
  #example for simple error comparison between prediction & measured
 valid <- lm(validation[[2]]$WT ~ validation[[2]]$predicted)
