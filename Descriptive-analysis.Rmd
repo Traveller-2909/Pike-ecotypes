@@ -534,98 +534,100 @@ d18O <- d18O%>%
 
 LA <- LA %>% drop_na()
 
-
 # Loop--------------------------------------------------------------------------
-
 
 IDOto <- unique(d18O$ID)
 
 for (i in 1:length(IDOto)) {
-  png(paste0("Data/Otoplots/", IDOto[i], ".png"), width = 1200)
-  par(mfrow = c(1,2), xaxs = "i", mar = c(10,10,1,0))
+  png(paste0("Data/Otoplots/Plots AG/", IDOto[i], ".png"), width = 1200)
   plot(LA[which(LA$ID == IDOto[i]), "LA_dist",], 
        LA[which(LA$ID == IDOto[i]), "Sr",], main = "", 
        xlab =  "", ylab = "", 
        xlim = c(0, max(LA[which(LA$ID == IDOto[i]), "LA_dist",], na.rm = T)),
        ylim = c(0, max(LA$Sr, na.rm = T)),
-       col.axis = "black", cex.axis = 1, type = "l", col = "orange", lwd = 3, 
-       fg = "black", cex = 1, axes = FALSE, pch = 19)
+       col.axis = "black", type = "l", col = "orange", lwd = 4, 
+       fg = "black", axes = FALSE, pch = 19)
   axis(1, pos = mean(LA[LA$area == "Freshwater",]$Sr, na.rm = T), 
-       at = c(0, 200, max(LA$LA_dist)),
-       labels = c("", "FW", ""), lwd.ticks = 0, tck = 0, 
-       col = "blue", lty = 1, lwd = 1, mgp = c(0,0,0))
+       at = c(0, max(LA[which(LA$ID == IDOto[i]), "LA_dist",], na.rm = T)-20,
+              max(LA$LA_dist)),
+       labels = c("", "Süßwasser", ""), lwd.ticks = 0, tck = 0, 
+       col = "aquamarine2", lty = 1, lwd = 2, mgp = c(0,0.5,0), 
+       cex.axis=2, font = 2)
   axis(1, pos = mean(LA[LA$area == "Freshwater",]$Sr, na.rm = T)+
          sd(LA[LA$area == "Freshwater",]$Sr, na.rm = T), 
-       at = c(0, 200, max(LA$LA_dist)),
+       at = c(0, 1200, max(LA$LA_dist)),
        labels = c("", "", ""), lwd.ticks = 0, tck = 0, 
-       col = "blue", lty = 3, lwd = 1, mgp = c(0,0,0))
+       col = "aquamarine2", lty = 3, lwd = 2, mgp = c(0,0,0))
   axis(1, pos = mean(LA[LA$area == "Freshwater",]$Sr, na.rm = T)-
          sd(LA[LA$area == "Freshwater",]$Sr, na.rm = T), 
-       at = c(0, 200, max(LA$LA_dist)),
+       at = c(0, 1200, max(LA$LA_dist)),
        labels = c("", "", ""), lwd.ticks = 0, tck = 0, 
-       col = "blue", lty = 3, lwd = 1, mgp = c(0,0,0))
+       col = "aquamarine2", lty = 3, lwd = 2, mgp = c(0,0,0))
   axis(1, pos = mean(LA[LA$area == "Marine",]$Sr, na.rm = T), 
-       at = c(0, 200, max(LA$LA_dist)),
-       labels = c("", "SW", ""), lwd.ticks = 0, tck = 0, 
-       col = "orange", lty = 1, lwd = 1, mgp = c(0,0,0))
+       at = c(0, max(LA[which(LA$ID == IDOto[i]), "LA_dist",], na.rm = T)-20,
+                   max(LA$LA_dist)),
+       labels = c("", "Brackwasser", ""), lwd.ticks = 0, tck = 0, 
+       col = "darkblue", lty = 1, lwd = 2, mgp = c(0,0.5,0), 
+       cex.axis=2, font = 2)
   axis(1, pos = mean(LA[LA$area == "Marine",]$Sr, na.rm = T)-
          sd(LA[LA$area == "Marine",]$Sr, na.rm = T), 
-       at = c(0, 200, max(LA$LA_dist)),
+       at = c(0, 1200, max(LA$LA_dist)),
        labels = c("", "", ""), lwd.ticks = 0, tck = 0, 
-       col = "orange", lty = 3, lwd = 1, mgp = c(0,0,0))
+       col = "darkblue", lty = 3, lwd = 2, mgp = c(0,0,0))
   axis(1, pos = mean(LA[LA$area == "Marine",]$Sr, na.rm = T)+
          sd(LA[LA$area == "Marine",]$Sr, na.rm = T), 
-       at = c(0, 200, max(LA$LA_dist)),
+       at = c(0, 1200, max(LA$LA_dist)),
        labels = c("", "", ""), lwd.ticks = 0, tck = 0, 
-       col = "orange", lty = 3, lwd = 1, mgp = c(0,0,0))
+       col = "darkblue", lty = 3, lwd = 2, mgp = c(0,0,0))
   axis(1, pos = 0, at = seq(0, max(LA$LA_dist), 500),
        labels = seq(0, max(LA$LA_dist), 500), lwd.ticks = 5, tck = 0, 
-       col = "black", lty = 1, lwd = 2, mgp = c(0, 0.5, 0))
+       col = "black", lty = 1, lwd = 2, mgp = c(0, 0.5, 0),
+       cex.axis=2, font = 2)
   axis(2, pos = 0, tcl = 0.2,
        at = seq(round(min(LA$Sr),3), 
                 round(max(LA$Sr),3), 0.001), 
-       labels = seq(round(min(LA$Sr),3), 
-                    round(max(LA$Sr),3), 0.001),
-       las = 2, mgp = c(0, 0.5, 0), cex.axis = 1, 
+       labels = seq(round(min(LA$Sr)*1000,0), 
+                    round(max(LA$Sr)*1000,0), 1),
+       las = 2, mgp = c(0, 0.5, 0), cex.axis = 2, font = 2, 
        lwd = 2, col = "black", col.axis = "black")
-  title(ylab = "Sr/Ca", cex.lab = 1, 
-        col.lab = "black", line = 5)
-  title(xlab = "Distance [um]", cex.lab = 1, 
+  title(ylab = list("Sr/Ca Verhältnis", cex = 2, font=2),
+        xlab = list("Distanz vom Kern [um]", cex = 2, font=2), 
         col.lab = "black", line = 1)
-  title(main = "Sr/Ca ratio")
-  text(x = 300, y = 0.009, labels = LA[which(LA$ID == IDOto[i]), "capt",])
+  text(x = 300, y = 0.008, labels = paste(IDOto[i], "-", 
+                                         LA[which(LA$ID == IDOto[i]), "capt",]), 
+       cex=3, font=2)
  
-  plot(d18O[which(d18O$ID == IDOto[i]), "sims_dist",], 
-       d18O[which(d18O$ID == IDOto[i]), "d18O",], main = "", 
-       xlab =  "", ylab = "", 
-       xlim = c(0, max(d18O[which(d18O$ID == IDOto[i]), "sims_dist",], na.rm = T)),
-       ylim = c(min(d18O$d18O, na.rm = T), 0),
-       col.axis = "black", cex.axis = 1, type = "b", col = "blue", lwd = 3, 
-       fg = "black", cex = 1, axes = FALSE, pch = 19)
-  axis(1, pos = mean(d18O[which(d18O$ID == IDOto[i]), "d18O",], na.rm = T), 
-       at = c(0, 200, max(d18O[which(d18O$ID == IDOto[i]), "sims_dist",], na.rm = T)),
-       labels = c("", "indiv.mean", ""), lwd.ticks = 0, tck = 0, 
-       col = "black", lty = 3, lwd = 1, mgp = c(0,0,0))
-  axis(1, pos = mean(d18O$d18O, na.rm = T), 
-       at = c(0, 200, max(d18O$sims_dist)),
-       labels = c("", "global mean", ""), lwd.ticks = 0, tck = 0, 
-       col = "black", lty = 1, lwd = 1, mgp = c(0,0,0))
-  axis(1, pos = round(min(d18O$d18O), 1), at = seq(0, max(d18O$sims_dist), 500),
-       labels = seq(0, max(d18O$sims_dist), 500), lwd.ticks = 5, tck = 0, 
-       col = "black", lty = 1, lwd = 2, mgp = c(0, 0.5, 0))
-  axis(2, pos = 0, tcl = 0.2,
-       at = seq(round(min(d18O$d18O, na.rm = T),1), 
-                round(max(d18O$d18O, na.rm = T),1), 1), 
-       labels = seq(round(min(d18O$d18O, na.rm = T),1), 
-                    round(max(d18O$d18O, na.rm = T),1), 1),
-       las = 2, mgp = c(0, 0.5, 0), cex.axis = 1, 
-       lwd = 2, col = "black", col.axis = "black")
-  title(ylab = "d18O", cex.lab = 1, 
-        col.lab = "black", line = 5)
-  title(xlab = "Distance [um]", cex.lab = 1, 
-        col.lab = "black", line = 1)
-  title(main = "d18O")
-  text(x = 300, y = 0, labels = d18O[which(d18O$ID == IDOto[i]), "capt",])
+  # plot(d18O[which(d18O$ID == IDOto[i]), "sims_dist",], 
+  #      d18O[which(d18O$ID == IDOto[i]), "d18O",], main = "", 
+  #      xlab =  "", ylab = "", 
+  #      xlim = c(0, max(d18O[which(d18O$ID == IDOto[i]), "sims_dist",], na.rm = T)),
+  #      ylim = c(min(d18O$d18O, na.rm = T), 0),
+  #      col.axis = "black", cex.axis = 1, type = "b", col = "blue", lwd = 3, 
+  #      fg = "black", cex = 1, axes = FALSE, pch = 19)
+  # axis(1, pos = mean(d18O[which(d18O$ID == IDOto[i]), "d18O",], na.rm = T), 
+  #      at = c(0, 200, max(d18O[which(d18O$ID == IDOto[i]), "sims_dist",], na.rm = T)),
+  #      labels = c("", "indiv.mean", ""), lwd.ticks = 0, tck = 0, 
+  #      col = "black", lty = 3, lwd = 1, mgp = c(0,0,0))
+  # axis(1, pos = mean(d18O$d18O, na.rm = T), 
+  #      at = c(0, 200, max(d18O$sims_dist)),
+  #      labels = c("", "global mean", ""), lwd.ticks = 0, tck = 0, 
+  #      col = "black", lty = 1, lwd = 1, mgp = c(0,0,0))
+  # axis(1, pos = round(min(d18O$d18O), 1), at = seq(0, max(d18O$sims_dist), 500),
+  #      labels = seq(0, max(d18O$sims_dist), 500), lwd.ticks = 5, tck = 0, 
+  #      col = "black", lty = 1, lwd = 2, mgp = c(0, 0.5, 0))
+  # axis(2, pos = 0, tcl = 0.2,
+  #      at = seq(round(min(d18O$d18O, na.rm = T),1), 
+  #               round(max(d18O$d18O, na.rm = T),1), 1), 
+  #      labels = seq(round(min(d18O$d18O, na.rm = T),1), 
+  #                   round(max(d18O$d18O, na.rm = T),1), 1),
+  #      las = 2, mgp = c(0, 0.5, 0), cex.axis = 1, 
+  #      lwd = 2, col = "black", col.axis = "black")
+  # title(ylab = "d18O", cex.lab = 1, 
+  #       col.lab = "black", line = 5)
+  # title(xlab = "Distance [um]", cex.lab = 1, 
+  #       col.lab = "black", line = 1)
+  # title(main = "d18O")
+  # text(x = 300, y = 0, labels = d18O[which(d18O$ID == IDOto[i]), "capt",])
   dev.off()  
 }
 

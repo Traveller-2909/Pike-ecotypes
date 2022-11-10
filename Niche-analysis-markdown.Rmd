@@ -1276,7 +1276,7 @@ raster::extract(yras, rec_sp, buffer = 500, small = T, fun = mean, na.rm = T)
 salras <- tras
 
 #save to RData
-save(sras, file = "Data/Spatial/Output/Salinity-IPDW-mean-2007-2022_monthly.RData")
+save(sras, file = "Data/Spatial/Output/Salinity-IPDW-spawning_season_17-22.RData")
 save(tras, file = "Data/Spatial/Output/Temp-IPDW-mean-2007-2022_monthly.RData")
 
 #load("Data/Olga Salinity interpolation/Data/IPDW_results.RData")
@@ -1285,10 +1285,11 @@ save(tras, file = "Data/Spatial/Output/Temp-IPDW-mean-2007-2022_monthly.RData")
 smean <- calc(sras, fun = mean)
 ssd <- calc(sras, fun = sd)
 srange <- calc(sras, fun = range)
+smax <- calc(sras, fun = max)
 
 srange_absolute <- srange$layer.2-srange$layer.1
 
-plot(srange_absolute)
+plot(smax)
 
 #yearly temperature
 tmean <- calc(tras, fun = mean)
@@ -1297,18 +1298,20 @@ sdRast <- calc(tras, fun = sd)
 
 trange_absolute <- trange$layer.2-trange$layer.1
 
-plot(smean)
+plot(tmean)
 
 #Write salinity rasters
 writeRaster(smean, "Data/Spatial/Output/Sal-ipdw_mean_17-22", format="GTiff",
             overwrite=T)
 writeRaster(ssd, "Data/Spatial/Output/Sal-ipdw_sd_17-22", format="GTiff", overwrite=T)
 writeRaster(srange_absolute,"Data/Spatial/Output/Sal-ipdw_range_17-22", format="GTiff", overwrite=T)
+writeRaster(smax,"Data/Spatial/Output/Sal-ipdw_max_17-22", format="GTiff", overwrite=T)
 
 #Write temperature rasters
 writeRaster(srange_absolute, "Data/Spatial/Output/Sal-ipdw_range_07-22", format="GTiff")
 writeRaster(ssd, "Data/Spatial/Output/Sal-ipdw_sd_07-22", format="GTiff", overwrite=T)
 writeRaster(smean, "Data/Spatial/Output/Sal-ipdw_mean_07-22", format="GTiff", overwrite=T)
+
 
 #Write measuring station shapefile
 rgdal::writeOGR(pnts, dsn = "Data/Spatial/Output", layer = "coords", driver = "ESRI Shapefile")
@@ -2755,7 +2758,7 @@ Samplingdata <- read.delim(file = "Data/Samp_Inst_months.txt", sep = "\t", heade
 #load Logger data
 Loggerdata <- read.delim(file = "Data/Logger_month_means.txt", sep = "\t", header = T, stringsAsFactors = F)
 
-load("Data/Spatial/IPDW_results.RData")
+load("Data/IPDW_results.RData")
 
 #Bring all into same format, LUNG data
 LUNGdata <- LUNGdata%>%
@@ -2936,7 +2939,7 @@ summary(Salm)
 a <- Salm$coefficients[[1]]
 b <- Salm$coefficients[[2]]
 
-newdata <- data.frame(Sr = seq(0.0007,0.006, 0.0001))
+newdata <- data.frame(Sr = seq(0.001,0.006, 0.0005))
 
 newdata$salinity2 <- predict(Salm, newdata)
 
