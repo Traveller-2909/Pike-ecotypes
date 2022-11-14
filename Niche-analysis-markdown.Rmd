@@ -1267,6 +1267,7 @@ for (i in 1:length(monthID)) {
 
  #example for simple error comparison between prediction & measured
 valid <- lm(validation[[2]]$WT ~ validation[[2]]$predicted)
+
 summary(valid)
 
 #This extracts salinity values from around the receivers and forms a mean

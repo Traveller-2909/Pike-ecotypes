@@ -536,7 +536,10 @@ LA <- LA %>% drop_na()
 
 # Loop--------------------------------------------------------------------------
 
+mypallete <- viridis::viridis(4, direction = 1)
+
 IDOto <- unique(d18O$ID)
+IDOto <- "BH-01904"
 
 for (i in 1:length(IDOto)) {
   png(paste0("Data/Otoplots/Plots AG/", IDOto[i], ".png"), width = 1200)
@@ -551,34 +554,34 @@ for (i in 1:length(IDOto)) {
        at = c(0, max(LA[which(LA$ID == IDOto[i]), "LA_dist",], na.rm = T)-20,
               max(LA$LA_dist)),
        labels = c("", "Süßwasser", ""), lwd.ticks = 0, tck = 0, 
-       col = "aquamarine2", lty = 1, lwd = 2, mgp = c(0,0.5,0), 
+       col = mypallete[3], lty = 1, lwd = 3, mgp = c(0,0.5,0), 
        cex.axis=2, font = 2)
   axis(1, pos = mean(LA[LA$area == "Freshwater",]$Sr, na.rm = T)+
          sd(LA[LA$area == "Freshwater",]$Sr, na.rm = T), 
        at = c(0, 1200, max(LA$LA_dist)),
        labels = c("", "", ""), lwd.ticks = 0, tck = 0, 
-       col = "aquamarine2", lty = 3, lwd = 2, mgp = c(0,0,0))
+       col = mypallete[3], lty = 3, lwd = 3, mgp = c(0,0,0))
   axis(1, pos = mean(LA[LA$area == "Freshwater",]$Sr, na.rm = T)-
          sd(LA[LA$area == "Freshwater",]$Sr, na.rm = T), 
        at = c(0, 1200, max(LA$LA_dist)),
        labels = c("", "", ""), lwd.ticks = 0, tck = 0, 
-       col = "aquamarine2", lty = 3, lwd = 2, mgp = c(0,0,0))
+       col = mypallete[3], lty = 3, lwd = 3, mgp = c(0,0,0))
   axis(1, pos = mean(LA[LA$area == "Marine",]$Sr, na.rm = T), 
        at = c(0, max(LA[which(LA$ID == IDOto[i]), "LA_dist",], na.rm = T)-20,
                    max(LA$LA_dist)),
        labels = c("", "Brackwasser", ""), lwd.ticks = 0, tck = 0, 
-       col = "darkblue", lty = 1, lwd = 2, mgp = c(0,0.5,0), 
+       col = mypallete[1], lty = 1, lwd = 3, mgp = c(0,0.5,0), 
        cex.axis=2, font = 2)
   axis(1, pos = mean(LA[LA$area == "Marine",]$Sr, na.rm = T)-
          sd(LA[LA$area == "Marine",]$Sr, na.rm = T), 
        at = c(0, 1200, max(LA$LA_dist)),
        labels = c("", "", ""), lwd.ticks = 0, tck = 0, 
-       col = "darkblue", lty = 3, lwd = 2, mgp = c(0,0,0))
+       col = mypallete[1], lty = 3, lwd = 3, mgp = c(0,0,0))
   axis(1, pos = mean(LA[LA$area == "Marine",]$Sr, na.rm = T)+
          sd(LA[LA$area == "Marine",]$Sr, na.rm = T), 
        at = c(0, 1200, max(LA$LA_dist)),
        labels = c("", "", ""), lwd.ticks = 0, tck = 0, 
-       col = "darkblue", lty = 3, lwd = 2, mgp = c(0,0,0))
+       col = mypallete[1], lty = 3, lwd = 3, mgp = c(0,0,0))
   axis(1, pos = 0, at = seq(0, max(LA$LA_dist), 500),
        labels = seq(0, max(LA$LA_dist), 500), lwd.ticks = 5, tck = 0, 
        col = "black", lty = 1, lwd = 2, mgp = c(0, 0.5, 0),
