@@ -1085,18 +1085,32 @@ Samplingdata <- read.delim(file = "Data/Samp_Inst_months.txt", sep = "\t", heade
 #load Logger data
 Loggerdata <- read.delim(file = "Data/Logger_month_means.txt", sep = "\t", header = T, stringsAsFactors = F)
 
+#Translocation data
+Felidata <- read.delim(file = "Data/Translocations.txt", sep = ",", header = T, stringsAsFactors = F)
+
 #Bring all into same format, LUNG data
 LUNGdata <- LUNGdata%>%
   transmute(name = name,
             id = id,
-            waterbody = waterbody,
+            waterbody = case_when(waterbody=="Sehrower Bach"~"Sehrowbach",
+                                  waterbody=="Westziese"~"Ziese",
+                                  waterbody=="Ostziese"~"Ziese",
+                                  waterbody=="Duvenbaek"~"Duwenbeek",
+                                  TRUE~waterbody),
             month = month,
             year = year,
-            identifier = paste0(month, "_", year),
+            identifier = case_when(year==2021&month==3|year==2021&month==4~"Spring_2021",
+                                   TRUE~paste0(month, "_", year)),
             Lat = Lat,
             Long = Long,
             type = type,
-            SAL = SAL,
+            SAL = case_when(waterbody=="Sehrowbach"~mean(Samplingdata[Samplingdata$waterbody=="Sehrowbach",]$SAL),
+                            waterbody=="Barthe"~mean(Samplingdata[Samplingdata$waterbody=="Barthe",]$SAL),
+                            waterbody=="Ziese"~mean(Samplingdata[Samplingdata$waterbody=="Ziese",]$SAL),
+                            waterbody=="Recknitz"~mean(Samplingdata[Samplingdata$waterbody=="Recknitz",]$SAL),
+                            waterbody=="Duwenbeek"~mean(Samplingdata[Samplingdata$waterbody=="Duwenbeek",]$SAL),
+                            waterbody=="Ryck"~mean(Samplingdata[Samplingdata$waterbody=="Ryck",]$SAL),
+                            TRUE~SAL),
             WT = WT)
 
 #BH sampling
@@ -1106,7 +1120,8 @@ Samplingdata <- Samplingdata%>%
             waterbody = waterbody,
             month = month,
             year = year,
-            identifier = paste0(month, "_", year),
+            identifier = case_when(year==2021&month==3|year==2021&month==4~"Spring_2021",
+                                   TRUE~paste0(month, "_", year)),
             Lat = Lat,
             Long = Long,
             type = type,
@@ -1120,30 +1135,49 @@ Loggerdata <- Loggerdata%>%
             waterbody = waterbody,
             month = month,
             year = year,
-            identifier = identifier,
+            identifier = case_when(year==2021&month==3|year==2021&month==4~"Spring_2021",
+                                   TRUE~identifier),
             Lat = Lat,
             Long = Long,
             type = type,
             SAL = SAL,
             WT = WT)
+
+#Transloc fish
+Felidata <- Felidata%>%
+  transmute(name="Translocation",
+            id="trans",
+            waterbody=paste0(Floy,Origin),
+            month=lubridate::month(parse_date_time(Date.and.Time, "ymd HM")),
+            year=lubridate::year(parse_date_time(Date.and.Time, "ymd HM")),
+            identifier=paste0("Spring_",year),
+            Lat=Latitude,
+            Long=Longitude,
+            type="trans",
+            SAL=Salinity,
+            WT=T)
 ```
 
 ```{r ipdw loop, include=FALSE, eval=FALSE}
+#Filter for interesting tributaries
+Tributaries <- LUNGdata%>%
+  filter(waterbody=="Sehrowbach"|waterbody=="Barthe"|waterbody=="Ziese"|waterbody=="Duwenbeek"|waterbody=="Ryck")
+Lagoons <- LUNGdata%>%
+  filter(type=="Coast")
 #Join & filter out freshwater, filter for years/months
-Saldata <- rbind(LUNGdata, Samplingdata, Loggerdata)
-Saldata <- LUNGdata
+Saldata <- rbind(Tributaries, Lagoons, Samplingdata, Loggerdata, Felidata)
+#Saldata <- LUNGdata
 
-Saldata <- Saldata%>%filter(type == "Coast" & 
-                              year>=2017 & month > 1 & month < 5)%>%
+Saldata <- Saldata%>%filter(identifier=="Spring_2021")%>%
   group_by(year, month, id, waterbody)%>%
   summarise(name=name,
             id=id,
             waterbody=waterbody,
             month=month,
             year=year,
-            identifier=paste0(year, month),
-            Lat=Lat,
-            Long=Long,
+            identifier=identifier,
+            Lat=as.numeric(Lat),
+            Long=as.numeric(Long),
             type=type,
             SAL=round(mean(SAL),2),
             WT=round(mean(WT),2))%>%
@@ -1171,7 +1205,7 @@ Land <- spTransform(Land, CRS("+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs
             
 #DEf
 monthID <- unique(Saldata$identifier)
-sras <- stack()
+sras2 <- stack()
 mras <- stack()
 validation <- NULL
 
@@ -1246,8 +1280,7 @@ for (i in 1:length(monthID)) {
     #perform ipdw, set name to month & year
     ipdw <- ipdw(training, costras, range = mean.neighdist*10, 
                        paramlist, overlapped = T)
-    ipdw <- setNames(ipdw[[1]], paste(unique(df$year), "Month",
-                                      unique(df$month)))
+    ipdw <- setNames(ipdw[[1]], "Spring_2021")
     
     #error estimation, generate data frame containing measured & interpolated
     measured.spdf <- data.frame(validate@data[12:14])
@@ -1260,15 +1293,20 @@ for (i in 1:length(monthID)) {
     #save measurement errors in list
     validation <- c(validation, valid.ipdw)
     #save interpolations into rasterstack
-    sras <- stack(sras, ipdw)
+    sras2 <- stack(sras2, ipdw)
 }
 
- plot(Land)
+plot(sras$Spring_2021)
+
+plot(sras2$Spring_2021)
+points(pnts)
 
  #example for simple error comparison between prediction & measured
-valid <- lm(validation[[2]]$WT ~ validation[[2]]$predicted)
+valid <- lm(validation[[2]]$SAL ~ validation[[2]]$predicted)
 
 summary(valid)
+
+plot(validation[[2]]$SAL, validation[[2]]$predicted)
 
 #This extracts salinity values from around the receivers and forms a mean
 
@@ -1277,12 +1315,12 @@ raster::extract(yras, rec_sp, buffer = 500, small = T, fun = mean, na.rm = T)
 salras <- tras
 
 #save to RData
-save(sras, file = "Data/Spatial/Output/Salinity-IPDW-spawning_season_17-22.RData")
+save(sras, file = "Data/Spatial/Output/Translocation_salinity_2021_lowrange.RData")
 save(tras, file = "Data/Spatial/Output/Temp-IPDW-mean-2007-2022_monthly.RData")
 
-#load("Data/Olga Salinity interpolation/Data/IPDW_results.RData")
-
 #yearly salinity
+load("Data/Spatial/Output/Salinity-IPDW-all_07-22.RData")
+
 smean <- calc(sras, fun = mean)
 ssd <- calc(sras, fun = sd)
 srange <- calc(sras, fun = range)
@@ -1290,6 +1328,9 @@ smax <- calc(sras, fun = max)
 
 srange_absolute <- srange$layer.2-srange$layer.1
 
+plot(smean)
+plot(ssd)
+plot(srange_absolute)
 plot(smax)
 
 #yearly temperature
@@ -1302,11 +1343,17 @@ trange_absolute <- trange$layer.2-trange$layer.1
 plot(tmean)
 
 #Write salinity rasters
-writeRaster(smean, "Data/Spatial/Output/Sal-ipdw_mean_17-22", format="GTiff",
+writeRaster(smean, "Data/Spatial/Output/Sal-ipdw_mean_07-22", format="GTiff",
             overwrite=T)
-writeRaster(ssd, "Data/Spatial/Output/Sal-ipdw_sd_17-22", format="GTiff", overwrite=T)
-writeRaster(srange_absolute,"Data/Spatial/Output/Sal-ipdw_range_17-22", format="GTiff", overwrite=T)
-writeRaster(smax,"Data/Spatial/Output/Sal-ipdw_max_17-22", format="GTiff", overwrite=T)
+writeRaster(ssd, "Data/Spatial/Output/Sal-ipdw_sd_07-22", format="GTiff", overwrite=T)
+writeRaster(srange_absolute,"Data/Spatial/Output/Sal-ipdw_range_07-22", format="GTiff", overwrite=T)
+writeRaster(smax,"Data/Spatial/Output/Sal-ipdw_max_07-22", format="GTiff", overwrite=T)
+
+#Write Felirasters
+writeRaster(sras$Spring_2021, "Data/Spatial/Output/Translocation_salinity_2021_lowrange", format="raster",
+            overwrite=T)
+writeRaster(sras2$Spring_2021, "Data/Spatial/Output/Translocation_salinity_2021_highrange", format="raster",
+            overwrite=T)
 
 #Write temperature rasters
 writeRaster(srange_absolute, "Data/Spatial/Output/Sal-ipdw_range_07-22", format="GTiff")
@@ -3037,7 +3084,8 @@ JTplot("BH-01922")
 pikeDB <- read.delim("Data/1Pike_Latest_Version.txt", header = T, sep = ";",
                      dec = ".", stringsAsFactors = F)
 
-Pikelist <- read.delim("Data/SIMS-pike_2022_id.txt", sep = ";")
+Pike <- read.delim("Data/SIMS-pike_2022_id.txt", sep = ";")
+Pikelist <- data.frame(Fish_ID=unique(Pike$ID))
 
 SIMS_pike2022 <- pikeDB %>%
   right_join(Pikelist, by = "Fish_ID")%>%
@@ -3063,7 +3111,7 @@ write.table(Pikelist, file = "Data/Otolith-pike_Sehrow_Barthe_Spring-2022_TR.txt
 pike_genetic <- read.csv2("Data/Genetics_Overview.csv")
 
 Genetics_done <- pike_genetic %>%
-  inner_join(Pikelist)
+  right_join(Pikelist, by="Fish_ID")
 ```
 
  
