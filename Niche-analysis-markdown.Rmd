@@ -1287,7 +1287,7 @@ for (i in 1:length(monthID)) {
     coordinates(measured.spdf) <- coordinates(validate)
     
     #claculate simple measurement error metrics, name after year & month
-    valid.ipdw <- errorGen(ipdw, measured.spdf, measured.spdf@data)
+    valid.ipdw <- errorGen(ipdw, measured.spdf, measured.spdf@data$SAL)
     valid.ipdw$id <- paste(unique(df$year),"Month", unique(df$month))
     
     #save measurement errors in list
@@ -1308,6 +1308,9 @@ summary(valid)
 
 plot(validation[[2]]$SAL, validation[[2]]$predicted)
 
+errorGen(ipdw, measured.spdf, measured.spdf@data$SAL,
+  plot = TRUE, title = "IPDW")
+
 #This extracts salinity values from around the receivers and forms a mean
 
 raster::extract(yras, rec_sp, buffer = 500, small = T, fun = mean, na.rm = T)
@@ -1318,8 +1321,10 @@ salras <- tras
 save(sras, file = "Data/Spatial/Output/Translocation_salinity_2021_lowrange.RData")
 save(tras, file = "Data/Spatial/Output/Temp-IPDW-mean-2007-2022_monthly.RData")
 
-#yearly salinity
+#monthly salinity
 load("Data/Spatial/Output/Salinity-IPDW-all_07-22.RData")
+#monthly temperature
+load("Data/Spatial/Output/Temp-IPDW-mean-2007-2022_monthly.RData")
 
 smean <- calc(sras, fun = mean)
 ssd <- calc(sras, fun = sd)
@@ -1368,6 +1373,186 @@ plot(pnts)
 
 # Clustering
 ## Data prep
+
+```{r divide SIMS-data into years, include=FALSE, echo=FALSE, eval=FALSE}
+
+rm(list = ls())
+
+#load SIMS data
+sims <- read.delim("Data/Otoliths/Otolith_data_clean_core_with_distance_um.txt", 
+                  header = T, stringsAsFactors = F, sep = "\t", dec = ".")
+length(unique(sims$ID))
+
+sims <- sims%>%
+  group_by(ID)%>%
+  transmute(fishID = ID2[[3]],
+            d18O = d18O,
+            distance = Distance_um)
+
+#remove Pilot fish (for now)
+sims <- sims[grepl("F1", sims$ID)==F,]
+sims <- sims[grepl("#", sims$ID)==F,]
+sims <- sims[grepl("34", sims$ID)==F,]
+
+#load annuli data
+#add BH-1567 and BH-01580 (no scales)
+annuli <- read.delim("Data/Otoliths/Otolith_annuli.txt", header = T, stringsAsFactors = F)
+
+#load pike data
+fishdata <- read.delim("Data/Otoliths/Scales_Oto_data.txt", header = T, 
+                       stringsAsFactors = F)
+names(fishdata) <- tolower(names(fishdata))
+fishdata <- fishdata%>%
+  transmute(fishID = id,
+            cdate = date,
+            TL_mm = tl,
+            weight = weight,
+            sex = sex,
+            area = area)
+
+#Extract BH-numbers from sample names (ObjectJ)
+substrRight <- function(x, n){
+  substr(x, nchar(x)-n+1, nchar(x))
+}
+
+annu <- annuli%>%
+ group_by(Sample)%>%
+ mutate(inc = case_when(I %in% "core"~"0",
+                         I %in% "edge"~as.character(length(unique(I))-1),
+                         TRUE~I))%>%
+ ungroup()%>%
+ transmute(fishID = substrRight(Sample, 8),
+           simsID = gsub("-", "",substr(Sample,1,2)),
+           quality = Quality,
+           age = Age,
+           cohort = Cohort,
+           core = Core,
+           inc = inc,
+           year = Year,
+           increment_um = case_when(inc %in% "0"~0,
+                                    TRUE ~ as.numeric(Increment)))
+
+annu <- data.frame(annu)
+IDpike <- unique(annu$fishID)
+rad <- NULL
+for (i in 1:length(IDpike)) {
+ d <- cumsum(coalesce(annu[which(annu$fishID == IDpike[i]), "increment_um"], 0)) + annu[which(annu$fishID == IDpike[i]), "increment_um"]*0
+ rad <- c(rad, d)
+}
+
+annu$rad <- rad
+
+annu$inc <- as.numeric(annu$inc)
+
+annu <- read.delim("Data/Otoliths/annuli_with_rad.txt", sep = "\t", dec = ".", header = T,
+                   stringsAsFactors = F)
+
+#correct annu placement
+ID <-"BH-01713"
+x <- 7
+y <- 30
+
+#annu[annu$fishID == ID & annu$year == x,]$rad_um <-
+#  annu[annu$fishID == ID & annu$year == x,]$rad_um+y
+#annu[annu$fishID == ID & annu$year == x,]$increment_um <- 
+#  annu[annu$fishID == ID & annu$year == x,]$increment_um+y
+
+
+#remove year
+#annu <- rbind(annu[annu$fishID!="BH-90981",], annu[annu$fishID == "BH-90981"&annu$year != 7,])
+#annu[annu$fishID == "BH-00391"&annu$year == 9,]$rad_um <- 1806.8
+#annu[annu$fishID == "BH-00391"&annu$year == 9,]$increment_um <- 112.7+6.2
+
+#inverse order for sims distances
+sims <- sims %>% group_by(ID)%>%arrange(distance, by_group = F)%>%ungroup()%>%
+  arrange(ID)
+
+IDpike <- unique(sims$ID)
+radID <- unique(annu$year)
+y <- NULL
+yy <- NULL
+
+for (i in 1:length(IDpike)) {
+  for (j in 0:length(annu[which(annu$simsID==IDpike[i]), "year"])) {
+y <- ifelse(sims[which(sims$ID==IDpike[i]), "distance"]<=
+                      annu[which(annu$simsID==IDpike[i]&annu$year==radID[j]), "rad_um"]&
+              sims[which(sims$ID==IDpike[i]), "distance"]
+              >=annu[which(annu$simsID==IDpike[i]&annu$year==radID[j-1]), "rad_um"],
+                    annu[which(annu$simsID==IDpike[i]&annu$year==radID[j]), "year"],
+            ifelse(sims[which(sims$ID==IDpike[i]), "distance"]>
+              max(annu[which(annu$simsID==IDpike[i]), "rad_um"])&
+                radID[j]==max(annu[which(annu$simsID==IDpike[i]), "year"]), 
+            max(annu[which(annu$simsID==IDpike[i]), "year"]),NA))
+yy <- c(yy, na.omit(y))
+  }
+}
+
+##revert the order of distances in "sims", so the yy vector can be pasted correctly
+
+str_sort(unique(sims$ID))
+str_sort(unique(annu$simsID))
+
+sims$year <- yy
+
+ggplot(sims, aes(year, d18O))+stat_summary(fun = mean)+
+  scale_x_continuous(breaks = seq(1,13,1), labels = seq(1,13,1))+
+  theme_minimal()
+  
+
+length(sims[sims$fishID=="BH-91050",]$distance)
+annu[annu$fishID=="BH-91328",]$year
+
+#prepare join
+#annu <- annu%>%
+#  transmute(simsID = simsID,
+#            fishID = fishID,
+#            quality = quality,
+#            age = age,
+#            cohort = cohort,
+#            core = core,
+#            year = inc,
+#            yearclass = year,
+#            increment_um = increment_um,
+#            rad_um = rad)
+
+sims <- sims%>%
+  transmute(simsID = ID,
+            fishID = fishID,
+            d18O = d18O,
+            distance_um = distance,
+            year = year)
+
+pikedata <- annu%>%
+  inner_join(sims, by = c("simsID", "fishID", "year"))
+
+pikedata_all <- pikedata%>%
+  inner_join(fishdata, by = "fishID")
+
+pikedata <- pikedata_all%>%
+  transmute(ID = fishID,
+            TL_mm = TL_mm,
+            weight = weight,
+            sex = sex,
+            area = area,
+            capt_date = cdate,
+            age = age,
+            cohort = cohort,
+            year = year,
+            inc_um = increment_um,
+            rad_um = rad_um,
+            core = core,
+            d18O = d18O,
+            sims_dist = distance_um)
+
+#save table
+write.table(pikedata, "Data/pike_data_d18O_years.txt", sep = "\t", 
+            dec = ".", row.names = F)
+#all fish have an edge increment that is counted as a year, only for fish caught between
+#01.01 and 31.04 this should be actually counted as year
+
+write.table(annu, "Data/annuli_with_rad.txt", sep = "\t", dec = ".", row.names = F)
+```
+
 ```{r marry d18O data to Sr, include=FALSE}
 #Read in LA-ICPMS and SIMS data
 rm(list = ls())
@@ -3112,6 +3297,8 @@ pike_genetic <- read.csv2("Data/Genetics_Overview.csv")
 
 Genetics_done <- pike_genetic %>%
   right_join(Pikelist, by="Fish_ID")
+
+pikeDB[pikeDB$Fish_ID=="BH-93066",]$Waterbody
 ```
 
  

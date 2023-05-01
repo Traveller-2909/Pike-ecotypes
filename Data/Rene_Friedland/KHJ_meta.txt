@@ -1,0 +1,51 @@
+File Data/Rene_Friedland/KHJ.nc (NC_FORMAT_CLASSIC):
+
+     9 variables (excluding dimension variables):
+        double PO4[lon,lat,time]   
+            standard_name: Orthophosphat-Phosphor
+            units: µmol/l
+        double TP[lon,lat,time]   
+            standard_name: Phosphor, gesamt
+            units: µmol/l
+        double Salt[lon,lat,time]   
+            standard_name: Salzgehalt
+            units: PSU
+        double Oxygen[lon,lat,time]   
+            standard_name: Sauerstoff
+            units: mg/l
+        double TN[lon,lat,time]   
+            standard_name: Stickstoff Gesamt
+            units: µmol/l
+        double NH4[lon,lat,time]   
+            standard_name: Ammonium-Stickstoff
+            units: µmol/l
+        double NO3[lon,lat,time]   
+            standard_name: Nitrat-Stickstoff
+            units: µmol/l
+        double Temp[lon,lat,time]   
+            standard_name: Wassertemperatur
+            units: °C
+        double Chl[lon,lat,time]   
+            standard_name: Chlorophyll-A
+            units: mg/m3
+
+     3 dimensions:
+        lon  Size:1 
+            standard_name: longitude
+            long_name: longitude
+            units: degrees_east
+            axis: X
+        lat  Size:1 
+            standard_name: latitude
+            long_name: latitude
+            units: degrees_north
+            axis: Y
+        time  Size:298 
+            standard_name: time
+            units: days since 0000-01-01
+            calendar: standard
+            long_name: Time
+
+    2 global attributes:
+        CreationDate: 2022/09/25
+        CreatedBy: R. Friedland (rene.friedland@io-warnemuende.de)
