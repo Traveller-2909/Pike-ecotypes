@@ -1,43 +1,51 @@
-OGR data source with driver: GPKG 
-Source: "C:\Users\timor\Nextcloud2\Timo\BODDENHECHT\Chapter 2\Stats\Niche analysis\Data\Spatial\Baltic_proper.gpkg", layer: "Baltic_proper"
-with 257 features
-It has 4 fields
-non finite transformation detected:
-           [,1]       [,2] [,3] [,4]
-  [1,] -8223981 -854892.09  Inf  Inf
-  [2,] -8227592 -850614.06  Inf  Inf
-  [3,] -8230439 -848202.34  Inf  Inf
-  [4,] -8232789 -845567.62  Inf  Inf
-  [5,] -8234924 -843986.14  Inf  Inf
-  [6,] -8235905 -841717.62  Inf  Inf
-  [7,] -8235185 -840531.27  Inf  Inf
-  [8,] -8232717 -840097.72  Inf  Inf
-  [9,] -8231357 -839171.63  Inf  Inf
- [10,] -8228496 -832661.64  Inf  Inf
- [11,] -8228656 -830015.69  Inf  Inf
- [12,] -8232092 -823094.25  Inf  Inf
- [13,] -8232501 -821625.06  Inf  Inf
- [14,] -8232324 -820586.42  Inf  Inf
- [15,] -8227937 -821805.59  Inf  Inf
- [16,] -8224681 -823169.78  Inf  Inf
- [17,] -8223033 -823295.36  Inf  Inf
- [18,] -8221840 -822749.63  Inf  Inf
- [19,] -8219833 -820529.65  Inf  Inf
- [20,] -8218489 -819683.94  Inf  Inf
- [21,] -8211893 -818781.65  Inf  Inf
- [22,] -8207926 -819106.92  Inf  Inf
- [23,] -8205007 -817819.64  Inf  Inf
- [24,] -8203331 -816052.94  Inf  Inf
- [25,] -8203220 -814753.46  Inf  Inf
- [26,] -8204605 -811585.45  Inf  Inf
- [27,] -8205419 -807142.47  Inf  Inf
- [28,] -8208655 -803171.27  Inf  Inf
- [29,] -8210814 -798160.82  Inf  Inf
- [30,] -8214692 -793822.04  Inf  Inf
- [31,] -8213930 -791663.04  Inf  Inf
- [32,] -8210937 -786947.38  Inf  Inf
- [33,] -8211123 -779434.84  Inf  Inf
- [34,] -8210306 -776345.35  Inf  Inf
- [35,] -8209076 -773692.68  Inf  Inf
- [36,] -8209178 -770779.83  Inf  Inf
- [37,] -8208445 -769012.39  Inf  In
+File Data/Rene_Friedland/KHJ.nc (NC_FORMAT_CLASSIC):
+
+     9 variables (excluding dimension variables):
+        double PO4[lon,lat,time]   
+            standard_name: Orthophosphat-Phosphor
+            units: µmol/l
+        double TP[lon,lat,time]   
+            standard_name: Phosphor, gesamt
+            units: µmol/l
+        double Salt[lon,lat,time]   
+            standard_name: Salzgehalt
+            units: PSU
+        double Oxygen[lon,lat,time]   
+            standard_name: Sauerstoff
+            units: mg/l
+        double TN[lon,lat,time]   
+            standard_name: Stickstoff Gesamt
+            units: µmol/l
+        double NH4[lon,lat,time]   
+            standard_name: Ammonium-Stickstoff
+            units: µmol/l
+        double NO3[lon,lat,time]   
+            standard_name: Nitrat-Stickstoff
+            units: µmol/l
+        double Temp[lon,lat,time]   
+            standard_name: Wassertemperatur
+            units: °C
+        double Chl[lon,lat,time]   
+            standard_name: Chlorophyll-A
+            units: mg/m3
+
+     3 dimensions:
+        lon  Size:1 
+            standard_name: longitude
+            long_name: longitude
+            units: degrees_east
+            axis: X
+        lat  Size:1 
+            standard_name: latitude
+            long_name: latitude
+            units: degrees_north
+            axis: Y
+        time  Size:298 
+            standard_name: time
+            units: days since 0000-01-01
+            calendar: standard
+            long_name: Time
+
+    2 global attributes:
+        CreationDate: 2022/09/25
+        CreatedBy: R. Friedland (rene.friedland@io-warnemuende.de)

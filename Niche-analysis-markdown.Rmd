@@ -29,6 +29,8 @@ library(ggpubr)
 library(vegan)
 library(mvabund)
 library(MASS)
+library(data.table)
+library(ncdf4)
 ```
 
 # Data handling environmental data
@@ -165,13 +167,14 @@ LUNG_sal_temp_rivers <- LUNG_sal_temp_rivers%>%
             Lat = Lat,
             Long = Long,
             measurement = measurement,
-            type = type)%>%
+            type = type,
+            turbidity=turbidity)%>%
   ungroup()%>%
   distinct()%>%
   pivot_wider(names_from = month, values_from = value)
 
-LUNG_sal_temp_rivers <- LUNG_sal_temp_rivers%>%
-  pivot_longer(cols = c(10:21), names_to = "month",
+LUNG_sal_temp_rivers2 <- LUNG_sal_temp_rivers%>%
+  pivot_longer(cols = c(11:22), names_to = "month",
                values_to = "value", values_drop_na = F)
 
 # remove double rows before converting to wide
@@ -189,24 +192,25 @@ LUNG_sal_temp_coast <- LUNG_sal_temp_coast%>%
             Lat = Lat,
             Long = Long,
             measurement = measurement,
-            type = type)%>%
+            type = type,
+            turbidity=mean(turbidity, na.rm=T))%>%
   ungroup()%>%
   distinct()%>%
   pivot_wider(names_from = month, values_from = value)
 
-LUNG_sal_temp_coast <- LUNG_sal_temp_coast%>%
-  pivot_longer(cols = c(10:21), names_to = "month",
+LUNG_sal_temp_coast2 <- LUNG_sal_temp_coast%>%
+  pivot_longer(cols = c(11:22), names_to = "month",
                values_to = "value", values_drop_na = F)
 
 # convert to wide
-LUNG_sal_temp_coast <- spread(LUNG_sal_temp_coast, parameter, value)
+LUNG_sal_temp_coast3 <- spread(LUNG_sal_temp_coast2, parameter, value)
 head(LUNG_sal_temp_coast)
-LUNG_sal_temp_rivers <- spread(LUNG_sal_temp_rivers, parameter, value)
+LUNG_sal_temp_rivers3 <- spread(LUNG_sal_temp_rivers2, parameter, value)
 head(LUNG_sal_temp_rivers)
-LUNG_sal_temp_rivers$SAL <- 0
+LUNG_sal_temp_rivers3$SAL <- 0
 
-LUNGdata_all <- rbind(LUNG_sal_temp_coast, LUNG_sal_temp_rivers)
-names(LUNGdata_all)[11] <- paste("WT")
+LUNGdata_all <- rbind(LUNG_sal_temp_coast3, LUNG_sal_temp_rivers3)
+names(LUNGdata_all)[12] <- paste("WT")
 
 # Add ID numbers
 LUNGdata_all <- LUNGdata_all %>%
@@ -247,6 +251,7 @@ LUNGdata_all <- LUNGdata_all %>%
             #turbidity = turbidity,
             measurement = measurement,
             type = type,
+            turbidity=turbidity,
             SAL = SAL,
             WT = WT)
 
@@ -269,7 +274,8 @@ LUNGdata_coast_21 <- LUNGdata_coast_21 %>%
             parameter = Parameter,
             value = Endergebnis)%>%
   filter(parameter == "Wassertemperatur"|
-           parameter == "Salzgehalt")
+           parameter == "Salzgehalt"|
+           parameter =="Sichttiefe")
 
 #insert NAs
 LUNGdata_coast_21 <- LUNGdata_coast_21%>%
@@ -302,6 +308,7 @@ LUNGdata_coast_21 <- LUNGdata_coast_21 %>%
             month = month,
             year = year,
             #depth = depth,
+            turbidity=Sichttiefe,
             SAL = Salzgehalt,
             WT = Wassertemperatur)
 
@@ -343,13 +350,11 @@ LUNGdata_coast_21 <- LUNGdata_coast_21 %>%
             #turbidity = turbidity,
             measurement = measurement,
             type = type,
+            turbidity=turbidity,
             SAL = SAL,
             WT = WT)
 
 LUNGdata_all <- data.frame(rbind(LUNGdata_all, LUNGdata_coast_21))
-
-#calculate missing months
-LUNGdata_all$SAL <- ifelse(is.na(LUNGdata_all$SAL), mean())##Here you left you donkey!
 
 # save file
 write.table(LUNGdata_all, file = "Data/LUNGdata_clean.txt", sep = "\t", row.names = F)
@@ -498,6 +503,7 @@ LUNGdata_months <- LUNGdata_all %>%
             Lat = first(Lat),
             Long = first(Long),
             type = type,
+            turbidity=mean(turbidity, na.rm = T),
             SAL = mean(SAL, na.rm = T),
             W.T = mean(WT, na.rm = T))%>%
   ungroup()%>%
@@ -505,7 +511,7 @@ LUNGdata_months <- LUNGdata_all %>%
 
 LUNGdata_months%>%filter(year>2011)%>%summarise(range(W.T, na.rm = T))
 
-LUNGdata_monthsw <- LUNGdata_months%>%pivot_wider(names_from = month, values_from = c(SAL, W.T))
+LUNGdata_monthsw <- LUNGdata_months%>%pivot_wider(names_from = month, values_from = c(SAL, W.T, turbidity))
 
 LUNGdata_complete <- LUNGdata_months%>%
   group_by(id, year)%>%
@@ -518,6 +524,7 @@ LUNGdata_complete <- LUNGdata_months%>%
             Lat = Lat,
             Long = Long,
             type = type,
+            turbidity=turbidity,
             SAL = case_when(is.na(SAL)~mean(SAL, na.rm = T),
                             TRUE ~ SAL),
             WT = W.T)%>%
@@ -649,6 +656,131 @@ lines(mto$d18O,mto$d2H, col = "red")
 residuals()
 
 ```
+
+```{r clean up ODIN data, include=FALSE, eval=FALSE}
+rm(list = ls())
+ODIN2 <- fread("Data/ODIN2/odin2_2023-04-24_105959_reprojected.csv")
+
+Odin3 <- ODIN2%>%
+  transmute(id=`Station name`,
+            year=Year,
+            month=Month,
+            day=Day,
+            Long=as.numeric(`Longitude(dec)`),
+            Lat=as.numeric(`Latitude(dec)`),
+            Sal=as.numeric(Salinity))
+
+Odin4 <- Odin3%>%
+  group_by(year, month, id)%>%
+  summarize(name="Odin",
+            id=id,
+            waterbody="Open Baltic",
+            month=month,
+            year=year,
+            identifier=paste0(month, "_", year),
+            Lat=Lat,
+            Long=Long,
+            type="Sea",
+            turbidity=NA,
+            SAL=mean(Sal, na.rm=T),
+            WT=NA)%>%
+  ungroup()%>%
+  distinct()
+
+fwrite(Odin4, file = "Data/Odindata_complete.csv")
+```
+
+```{r Rene´s files, include=FALSE, eval=FALSE}
+rm(list = ls())
+Renedata1 <- nc_open("Data/Rene_Friedland/KHJ.nc")
+
+{
+    sink("Data/Rene_Friedland/KHJ_meta.txt")
+ print(Renedata1)
+    sink()
+}
+
+Long <- ncvar_get(Renedata1, "lon")
+Lat <- ncvar_get(Renedata1, "lat", verbose = F)
+time <- ncvar_get(Renedata1, "time")
+
+Sdate <- as.Date(time, origin = "0000-01-01")
+
+SAL <- ncvar_get(Renedata1, "Salt")
+WT <- ncvar_get(Renedata1, "Temp")
+
+Station1 <- data.frame(name="KHJ", 
+                       id="0313040702", 
+                       waterbody="Stettiner Haff", 
+                       month=month(Sdate), 
+                       year=year(Sdate), 
+                       identifier=paste0(month(Sdate), "_", year(Sdate)),
+                       Lat=Lat,
+                       Long=Long,
+                       type="Coast",
+                       turbidity=NA,
+                       SAL=SAL,
+                       WT=WT)
+
+Renedata2 <- nc_open("Data/Rene_Friedland/KHM.nc")
+
+{
+    sink("Data/Rene_Friedland/KHM_meta.txt")
+ print(Renedata1)
+    sink()
+}
+
+Long <- ncvar_get(Renedata2, "lon")
+Lat <- ncvar_get(Renedata2, "lat", verbose = F)
+time <- ncvar_get(Renedata2, "time")
+
+Sdate <- as.Date(time, origin = "0000-01-01")
+
+SAL <- ncvar_get(Renedata2, "Salt")
+WT <- ncvar_get(Renedata2, "Temp")
+
+Station2 <- data.frame(name="KHM", 
+                       id="0313040905", 
+                       waterbody="Stettiner Haff", 
+                       month=month(Sdate), 
+                       year=year(Sdate), 
+                       identifier=paste0(month(Sdate), "_", year(Sdate)),
+                       Lat=Lat,
+                       Long=Long,
+                       type="Coast",
+                       turbidity=NA,
+                       SAL=SAL,
+                       WT=WT)
+
+Turb1 <- fread("Data/Rene_Friedland/Sichttiefe_KHJ.CSV")
+Turb1$name <- "KHJ"
+Turb2 <- fread("Data/Rene_Friedland/Sichttiefe_KHM.CSV")
+Turb2$name <- "KHM"
+
+Turbturb <- rbind(Turb1, Turb2)
+
+Turbturb$identifier <- paste0(month(parse_date_time(Turbturb$DATUM_Uhrzeit, "dmy")), "_",year(parse_date_time(Turbturb$DATUM_Uhrzeit, "dmy")))
+
+Stettiner <- rbind(Station1, Station2)
+
+Stettiner <- Stettiner%>%
+  left_join(Turbturb, by = c("name","identifier"))%>%
+  transmute(name=name,
+            id=id, 
+            waterbody=waterbody, 
+            month=month, 
+            year=year, 
+            identifier=identifier,
+            Lat=Lat,
+            Long=Long,
+            type=type,
+            turbidity=SICHTTIEFE,
+            SAL=SAL,
+            WT=WT)
+
+fwrite(Stettiner, "Data/Stettiner_Haff_complete.csv")
+```
+
 
 ```{r BH-data, include=FALSE, eval=FALSE}
 # Script to read in opportunistic salinity & temperature measurements from BH-fieldwork
@@ -1088,6 +1220,12 @@ Loggerdata <- read.delim(file = "Data/Logger_month_means.txt", sep = "\t", heade
 #Translocation data
 Felidata <- read.delim(file = "Data/Translocations.txt", sep = ",", header = T, stringsAsFactors = F)
 
+#Baltic data
+Odindata <- fread("Data/Odindata_complete.csv")
+
+#Stettiner Haff
+Stettiner <- fread("Data/Stettiner_Haff_complete.csv")
+
 #Bring all into same format, LUNG data
 LUNGdata <- LUNGdata%>%
   transmute(name = name,
@@ -1104,6 +1242,7 @@ LUNGdata <- LUNGdata%>%
             Lat = Lat,
             Long = Long,
             type = type,
+            turbidity=turbidity,
             SAL = case_when(waterbody=="Sehrowbach"~mean(Samplingdata[Samplingdata$waterbody=="Sehrowbach",]$SAL),
                             waterbody=="Barthe"~mean(Samplingdata[Samplingdata$waterbody=="Barthe",]$SAL),
                             waterbody=="Ziese"~mean(Samplingdata[Samplingdata$waterbody=="Ziese",]$SAL),
@@ -1125,6 +1264,7 @@ Samplingdata <- Samplingdata%>%
             Lat = Lat,
             Long = Long,
             type = type,
+            turbidity=NA,
             SAL = SAL,
             WT = WT)
 
@@ -1140,6 +1280,7 @@ Loggerdata <- Loggerdata%>%
             Lat = Lat,
             Long = Long,
             type = type,
+            turbidity=NA,
             SAL = SAL,
             WT = WT)
 
@@ -1164,27 +1305,29 @@ Tributaries <- LUNGdata%>%
   filter(waterbody=="Sehrowbach"|waterbody=="Barthe"|waterbody=="Ziese"|waterbody=="Duwenbeek"|waterbody=="Ryck")
 Lagoons <- LUNGdata%>%
   filter(type=="Coast")
-#Join & filter out freshwater, filter for years/months
-Saldata <- rbind(Tributaries, Lagoons, Samplingdata, Loggerdata, Felidata)
-#Saldata <- LUNGdata
 
-Saldata <- Saldata%>%filter(identifier=="Spring_2021")%>%
-  group_by(year, month, id, waterbody)%>%
+Alldata <- rbind(Lagoons, Stettiner)
+#Join & filter out freshwater, filter for years/months
+#Saldata <- rbind(Tributaries, Lagoons, Samplingdata, Loggerdata, Felidata)
+Saldata <- Alldata
+
+Saldata <- Saldata%>%
+  filter(year > 2018 & turbidity <=5)%>%
+  group_by(year, name, waterbody, )%>%
   summarise(name=name,
-            id=id,
             waterbody=waterbody,
-            month=month,
             year=year,
-            identifier=identifier,
+            identifier=as.character(year),
             Lat=as.numeric(Lat),
             Long=as.numeric(Long),
             type=type,
+            turbidity=round(mean(turbidity),2),
             SAL=round(mean(SAL),2),
             WT=round(mean(WT),2))%>%
   distinct()
 
 #correct typo in sampling point
-Saldata[Saldata$identifier=="20222"&Saldata$waterbody=="SB",]$Long <- 13.15835
+Saldata[Saldata$identifier=="2022"&Saldata$waterbody=="SB",]$Long <- 13.15835
 
 #load in receiver for later checking accessibility of rasterstack
 # Rec <- read.csv2("Data/Rec-Arrays_ALL.csv", header = T, 
@@ -1199,13 +1342,22 @@ Saldata[Saldata$identifier=="20222"&Saldata$waterbody=="SB",]$Long <- 13.15835
 
 #load in land layer
 Land <- readOGR("Data/Spatial/Studyarea_buffered.gpkg")
+Land2 <- readOGR("Data/Spatial/Baltic_landmass.gpkg") #We need a Baltic shape!
+
+plot(pnts)
   
 #transform to UTM (meters)
 Land <- spTransform(Land, CRS("+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs"))
-            
+ 
+plot(Land)
+points(pnts)
+plot(costras)
+points(pnts)
+
 #DEf
+monthID <- c("2019", "2020", "2022")
 monthID <- unique(Saldata$identifier)
-sras2 <- stack()
+raster <- stack()
 mras <- stack()
 validation <- NULL
 
@@ -1214,13 +1366,12 @@ for (i in 1:length(monthID)) {
     df <- Saldata[which(Saldata$identifier == monthID[i]),]
     
     #generate coordinates, make sure format is Long-Lat
-    xy <- df[,c(8,7)]
+    xy <- df[,c(6,5)]
     
     #convert to spatial points
     pnts <- SpatialPointsDataFrame(coords = xy, data = df,
                                    proj4string = CRS("+init=epsg:4326"))
-    pnts <- spTransform(pnts, CRS("+proj=utm +zone=33 +ellps=GRS80 
-                                           +units=m +no_defs"))
+    pnts <- spTransform(pnts, CRS("+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs"))
     
     #generate costraster, resolution in m
     costras <- costrasterGen(pnts, Land, extent = "polys", 
@@ -1242,11 +1393,11 @@ for (i in 1:length(monthID)) {
     #spatial join
     fulldataset.over <- over(pnts, gridpol)
     fulldataset.over <- cbind(data.frame(fulldataset.over), 
-                          setNames(data.frame(pnts), c("name", "id",
-                                                       "waterbody","month",
-                                                       "year","identifier",
+                          setNames(data.frame(pnts), c("year", "name",
+                                                       "waterbody",
+                                                       "identifier",
                                                        "Lat", "Long", "type",
-                                                       "SAL", "WT",
+                                                       "turbidity", "SAL", "WT",
                                                        "x.utm","y.utm")))
     #grid selection
     set.seed(2)
@@ -1275,15 +1426,15 @@ for (i in 1:length(monthID)) {
     #ipdw calculations require projected data, make sure projections match
     projection(training) <- projection(pnts)
     projection(validate) <- projection(pnts)
-    paramlist <- c("SAL")
+    paramlist <- c("turbidity")
     
     #perform ipdw, set name to month & year
     ipdw <- ipdw(training, costras, range = mean.neighdist*10, 
                        paramlist, overlapped = T)
-    ipdw <- setNames(ipdw[[1]], "Spring_2021")
+    ipdw <- setNames(ipdw[[1]], paste(unique(df$year), "Month",unique(df$month)))
     
     #error estimation, generate data frame containing measured & interpolated
-    measured.spdf <- data.frame(validate@data[12:14])
+    measured.spdf <- data.frame(validate@data[11:14])
     coordinates(measured.spdf) <- coordinates(validate)
     
     #claculate simple measurement error metrics, name after year & month
@@ -1293,10 +1444,10 @@ for (i in 1:length(monthID)) {
     #save measurement errors in list
     validation <- c(validation, valid.ipdw)
     #save interpolations into rasterstack
-    sras2 <- stack(sras2, ipdw)
+    raster <- stack(raster, ipdw)
 }
 
-plot(sras$Spring_2021)
+plot(raster)
 
 plot(sras2$Spring_2021)
 points(pnts)
@@ -1320,20 +1471,23 @@ salras <- tras
 #save to RData
 save(sras, file = "Data/Spatial/Output/Translocation_salinity_2021_lowrange.RData")
 save(tras, file = "Data/Spatial/Output/Temp-IPDW-mean-2007-2022_monthly.RData")
+save(raster, file = "Data/Spatial/Output/Turb-IPDW-mean-2007-2022_monthly.RData")
 
 #monthly salinity
 load("Data/Spatial/Output/Salinity-IPDW-all_07-22.RData")
 #monthly temperature
 load("Data/Spatial/Output/Temp-IPDW-mean-2007-2022_monthly.RData")
+#monthly turbidity
+load("Data/Spatial/Output/Turb-IPDW-mean-2007-2022_monthly.RData")
 
-smean <- calc(sras, fun = mean)
-ssd <- calc(sras, fun = sd)
+mean_turb <- calc(raster, fun = mean)
+ssd <- calc(raster, fun = sd)
 srange <- calc(sras, fun = range)
 smax <- calc(sras, fun = max)
 
-srange_absolute <- srange$layer.2-srange$layer.1
+srange_upper <- srange$layer.2
 
-plot(smean)
+plot(mean_turb)
 plot(ssd)
 plot(srange_absolute)
 plot(smax)
@@ -1345,13 +1499,12 @@ sdRast <- calc(tras, fun = sd)
 
 trange_absolute <- trange$layer.2-trange$layer.1
 
-plot(tmean)
+plot(raster)
 
 #Write salinity rasters
-writeRaster(smean, "Data/Spatial/Output/Sal-ipdw_mean_07-22", format="GTiff",
-            overwrite=T)
+writeRaster(mean_turb, "Data/Spatial/Output/Turbidity_raster_book_revised", format="GTiff", overwrite=T)
 writeRaster(ssd, "Data/Spatial/Output/Sal-ipdw_sd_07-22", format="GTiff", overwrite=T)
-writeRaster(srange_absolute,"Data/Spatial/Output/Sal-ipdw_range_07-22", format="GTiff", overwrite=T)
+writeRaster(srange_upper,"Data/Spatial/Output/Sal-ipdw_range_07-22", format="GTiff", overwrite=T)
 writeRaster(smax,"Data/Spatial/Output/Sal-ipdw_max_07-22", format="GTiff", overwrite=T)
 
 #Write Felirasters
